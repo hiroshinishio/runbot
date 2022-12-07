@@ -11,6 +11,7 @@ class ResConfigSettings(models.TransientModel):
 
     runbot_workers = fields.Integer('Default number of workers')
     runbot_containers_memory = fields.Float('Containers Mem limit (in GiB)')
+    runbot_containers_cpus = fields.Float('Allowed Containers CPUs (0 means no limit)')
     runbot_memory_bytes = fields.Float('Bytes', compute='_compute_memory_bytes')
     runbot_running_max = fields.Integer('Max running builds')
     runbot_timeout = fields.Integer('Max step timeout (in seconds)')
@@ -59,6 +60,7 @@ class ResConfigSettings(models.TransientModel):
         res = super(ResConfigSettings, self).get_values()
         get_param = self.env['ir.config_parameter'].sudo().get_param
         res.update(runbot_workers=int(get_param('runbot.runbot_workers', default=2)),
+                   runbot_containers_cpus=float(get_param('runbot.runbot_containers_cpus', default=0)),
                    runbot_containers_memory=float(get_param('runbot.runbot_containers_memory', default=0)),
                    runbot_running_max=int(get_param('runbot.runbot_running_max', default=5)),
                    runbot_timeout=int(get_param('runbot.runbot_timeout', default=10000)),
@@ -82,6 +84,7 @@ class ResConfigSettings(models.TransientModel):
         super(ResConfigSettings, self).set_values()
         set_param = self.env['ir.config_parameter'].sudo().set_param
         set_param("runbot.runbot_workers", self.runbot_workers)
+        set_param("runbot.runbot_containers_cpus", self.runbot_containers_cpus)
         set_param("runbot.runbot_containers_memory", self.runbot_containers_memory)
         set_param("runbot.runbot_running_max", self.runbot_running_max)
         set_param("runbot.runbot_timeout", self.runbot_timeout)

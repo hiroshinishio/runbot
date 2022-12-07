@@ -47,6 +47,9 @@
                       <field name="runbot_containers_memory"/>
                       <field name="runbot_memory_bytes" readonly='1' class="text-muted"/>
                     </setting>
+                    <setting>
+                      <field name="runbot_containers_cpus"/>
+                    </setting>
                   </block>
 
                   <block title="GC">
