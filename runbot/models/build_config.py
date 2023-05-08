@@ -100,6 +100,7 @@ class ConfigStepUpgradeDb(models.Model):
     db_pattern = fields.Char('Db suffix pattern')
     min_target_version_id = fields.Many2one('runbot.version', "Minimal target version_id")
 
+
 TYPES = [
         ('install_odoo', 'Test odoo'),
         ('run_odoo', 'Run odoo'),
@@ -110,6 +111,8 @@ TYPES = [
         ('test_upgrade', 'Test Upgrade'),
         ('restore', 'Restore'),
     ]
+
+
 class ConfigStep(models.Model):
     _name = 'runbot.build.config.step'
     _description = "Config step"
@@ -179,6 +182,8 @@ class ConfigStep(models.Model):
 
     commit_limit = fields.Integer('Commit limit', default=50)
     file_limit = fields.Integer('File limit', default=450)
+    break_before_if_ko = fields.Boolean('Break before this step if build is ko')
+    break_after_if_ko = fields.Boolean('Break after this step if build is ko')
 
     @api.constrains('python_code')
     def _check_python_code(self):

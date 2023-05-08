@@ -805,6 +805,19 @@ class BuildResult(models.Model):
                 next_index += 1
                 continue
             break
+
+        if self.local_result == 'ko':
+            if self.active_step and self.active_step.break_after_if_ko:
+                self._log('break_on_ko', f'Build is in failure, stopping after {self.active_step.name}')
+                self.local_state = 'done'
+                self.active_step = False
+                return
+            if new_step.break_before_if_ko:
+                self._log('break_on_ko', f'Build is in failure, stopping before {new_step.name}')
+                self.local_state = 'done'
+                self.active_step = False
+                return
+
         build.active_step = new_step.id
         build.local_state = new_step._step_state()
 

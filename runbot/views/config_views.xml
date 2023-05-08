@@ -47,6 +47,8 @@
                         <field name="protected"/>
                         <field name="default_sequence" groups="base.group_no_one"/>
                         <field name="group" groups="base.group_no_one"/>
+                        <field name="break_after_if_ko"/>
+                        <field name="break_before_if_ko"/>
                     </group>
                     <group string="Stats regexes" invisible="not make_stats">
                       <field name="build_stat_regex_ids">
