@@ -47,6 +47,7 @@ class Host(models.Model):
     paused = fields.Boolean('Paused', help='Host will stop scheduling while paused')
     profile = fields.Boolean('Profile', help='Enable profiling on this host')
 
+    use_docker_registry = fields.Boolean('Use Docker Registry', default=False, help="Use docker registry for pulling images")
 
     def _compute_nb(self):
         groups = self.env['runbot.build'].read_group(
