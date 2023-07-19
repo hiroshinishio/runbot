@@ -90,7 +90,11 @@
                       <field name="runbot_upgrade_exception_message" class="w-100"/>
                     </setting>
                   </block>
-
+                  <block title="Docker Registry Settings">
+                    <setting>
+                      <field name="runbot_docker_registry_host_id"/>
+                    </setting>
+                  </block>
                 </app>
               </xpath>
             </field>
