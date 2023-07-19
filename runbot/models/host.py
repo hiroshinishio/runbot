@@ -7,7 +7,7 @@ from collections import defaultdict
 from odoo import models, fields, api
 from odoo.tools import config, ormcache, file_open
 from ..common import fqdn, local_pgadmin_cursor, os, list_local_dbs, local_pg_cursor
-from ..container import docker_build
+from ..container import docker_build, docker_push
 
 _logger = logging.getLogger(__name__)
 
@@ -129,34 +129,39 @@ class Host(models.Model):
             self._docker_build_dockerfile(dockerfile)
         _logger.info('Done...')
 
-    def _docker_build_dockerfile(self, dockerfile):
-        start = time.time()
-        docker_build_path = self.env['runbot.runbot']._path('docker', dockerfile.image_tag)
-        os.makedirs(docker_build_path, exist_ok=True)
+    def _docker_build_dockerfile(self, dockerfile, workdir):
+        icp = self.env['ir.config_parameter']
+        docker_registry_host_id = icp.get_param('runbot.docker_registry_host_id', default=False)
+        if not self.use_docker_registry or docker_registry_host_id == self.id:
+            start = time.time()
+            # _logger.info('Building %s, %s', dockerfile.name, hash(str(dockerfile.dockerfile)))
+            docker_build_path = self.env['runbot.runbot']._path('docker', dockerfile.image_tag)
+            os.makedirs(docker_build_path, exist_ok=True)
+            user = getpass.getuser()
 
-        user = getpass.getuser()
+            docker_append = f"""
+                RUN groupadd -g {os.getgid()} {user} \\
+                && useradd -u {os.getuid()} -g {user} -G audio,video {user} \\
+                && mkdir /home/{user} \\
+                && chown -R {user}:{user} /home/{user}
+                USER {user}
+                ENV COVERAGE_FILE /data/build/.coverage
+                """
+            with open(self.env['runbot.runbot']._path('docker', dockerfile.image_tag, 'Dockerfile'), 'w') as Dockerfile:
+                Dockerfile.write(dockerfile.dockerfile + docker_append)
 
-        docker_append = f"""
-            RUN groupadd -g {os.getgid()} {user} \\
-            && useradd -u {os.getuid()} -g {user} -G audio,video {user} \\
-            && mkdir /home/{user} \\
-            && chown -R {user}:{user} /home/{user}
-            USER {user}
-            ENV COVERAGE_FILE /data/build/.coverage
-            """
-        with open(self.env['runbot.runbot']._path('docker', dockerfile.image_tag, 'Dockerfile'), 'w') as Dockerfile:
-            Dockerfile.write(dockerfile.dockerfile + docker_append)
+            docker_build_success, msg = docker_build(docker_build_path, dockerfile.image_tag)
+            if not docker_build_success:
+                dockerfile.to_build = False
+                dockerfile.message_post(body=f'Build failure:\n{msg}')
+                # self.env['runbot.runbot']._warning(f'Dockerfile build "{dockerfile.image_tag}" failed on host {self.name}')
+            else:
+                duration = time.time() - start
+                if duration > 1:
+                    _logger.info('Dockerfile %s finished build in %s', dockerfile.image_tag, duration)
+                # In all cases we want to push image on the local registry as every runbot builder is running a registry
+                docker_push(dockerfile.image_tag)
 
-        docker_build_success, msg = docker_build(docker_build_path, dockerfile.image_tag)
-        if not docker_build_success:
-            dockerfile.to_build = False
-            dockerfile.message_post(body=f'Build failure:\n{msg}')
-            # self.env['runbot.runbot']._warning(f'Dockerfile build "{dockerfile.image_tag}" failed on host {self.name}')
-        else:
-            duration = time.time() - start
-            if duration > 1:
-                _logger.info('Dockerfile %s finished build in %s', dockerfile.image_tag, duration)
-    
     @ormcache()
     def _host_list(self):
         return {host.name: host.id for host in self.search([])}
