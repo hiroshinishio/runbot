@@ -1222,7 +1222,7 @@ class TestRetry:
             (users['reviewer'], 'hansen r+'),
             (users['reviewer'], 'hansen retry'),
             seen(env, prx, users),
-            (users['user'], "I'm sorry, @{reviewer}: retry makes no sense when the PR is not in error.".format_map(users)),
+            (users['user'], "@{reviewer} retry makes no sense when the PR is not in error.".format_map(users)),
         ]
 
     @pytest.mark.parametrize('disabler', ['user', 'other', 'reviewer'])
@@ -2909,7 +2909,7 @@ class TestReviewing(object):
             (users['user'], "I'm sorry, @{}. I'm afraid I can't do that.".format(users['other'])),
             (users['reviewer'], 'hansen r+'),
             (users['reviewer'], 'hansen r+'),
-            (users['user'], "I'm sorry, @{}: this PR is already reviewed, reviewing it again is useless.".format(
+            (users['user'], "@{} this PR is already reviewed, reviewing it again is useless.".format(
                  users['reviewer'])),
         ]
 
@@ -2937,7 +2937,7 @@ class TestReviewing(object):
         assert prx.comments == [
             (users['reviewer'], 'hansen r+'),
             seen(env, prx, users),
-            (users['user'], "I'm sorry, @{}: you can't review+.".format(users['reviewer'])),
+            (users['user'], "@{} you can't review+. Skill issue.".format(users['reviewer'])),
         ]
 
     def test_self_review_success(self, env, repo, users, config):
@@ -3092,7 +3092,7 @@ class TestReviewing(object):
             seen(env, pr, users),
             (users['reviewer'], 'hansen delegate+'),
             (users['user'], 'hansen r+'),
-            (users['user'], f"I'm sorry, @{users['user']}: I must know your email before you can review PRs. Please contact an administrator."),
+            (users['user'], f"@{users['user']} I must know your email before you can review PRs. Please contact an administrator."),
         ]
         user_partner.fetch_github_email()
         assert user_partner.email
@@ -3394,6 +3394,8 @@ class TestRecognizeCommands:
             (users['reviewer'], "hansen do the thing"),
             (users['reviewer'], "hansen @bobby-b r+ :+1:"),
             seen(env, pr, users),
+            (users['user'], "@{reviewer} unknown command 'do'".format_map(users)),
+            (users['user'], "@{reviewer} unknown command '@bobby-b'".format_map(users)),
         ]
 
 class TestRMinus:

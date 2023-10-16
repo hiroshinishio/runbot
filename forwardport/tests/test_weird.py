@@ -809,7 +809,7 @@ def test_approve_draft(env, config, make_repo, users):
     assert pr.comments == [
         (users['reviewer'], 'hansen r+'),
         seen(env, pr, users),
-        (users['user'], f"I'm sorry, @{users['reviewer']}: draft PRs can not be approved."),
+        (users['user'], f"@{users['reviewer']} draft PRs can not be approved."),
     ]
 
     with prod:

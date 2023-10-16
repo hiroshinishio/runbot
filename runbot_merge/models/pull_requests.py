@@ -8,7 +8,7 @@ import logging
 import pprint
 import re
 import time
-from typing import Optional, Union
+from typing import Optional, Union, List, Literal
 
 import sentry_sdk
 import werkzeug
@@ -16,6 +16,7 @@ import werkzeug
 from odoo import api, fields, models, tools
 from odoo.exceptions import ValidationError
 from odoo.osv import expression
+from . import commands
 
 from .. import github, exceptions, controllers, utils
 
@@ -561,71 +562,46 @@ class PullRequests(models.Model):
             'closing': closing,
         })
 
-    def _parse_command(self, commandstring):
-        for m in re.finditer(
-            r'(\S+?)(?:([+-])|=(\S*))?(?=\s|$)',
-            commandstring,
-        ):
-            name, flag, param = m.groups()
-            if name == 'r':
-                name = 'review'
-            if flag in ('+', '-'):
-                yield name, flag == '+'
-            elif name == 'delegate':
-                if param:
-                    for p in param.split(','):
-                        yield 'delegate', p.lstrip('#@')
-            elif name == 'override':
-                if param:
-                    for p in param.split(','):
-                        yield 'override', p
-            elif name in ('p', 'priority'):
-                if param in ('0', '1', '2'):
-                    yield ('priority', int(param))
-            elif any(name == k for k, _ in type(self).merge_method.selection):
-                yield ('method', name)
-            else:
-                yield name, param
-
     def _parse_commands(self, author, comment, login):
-        """Parses a command string prefixed by Project::github_prefix.
-
-        A command string can contain any number of space-separated commands:
-
-        retry
-          resets a PR in error mode to ready for staging
-        r(eview)+/-
-           approves or disapproves a PR (disapproving just cancels an approval)
-        delegate+/delegate=<users>
-          adds either PR author or the specified (github) users as
-          authorised reviewers for this PR. ``<users>`` is a
-          comma-separated list of github usernames (no @)
-        p(riority)=2|1|0
-          sets the priority to normal (2), pressing (1) or urgent (0).
-          Lower-priority PRs are selected first and batched together.
-        rebase+/-
-          Whether the PR should be rebased-and-merged (the default) or just
-          merged normally.
-        """
         assert self, "parsing commands must be executed in an actual PR"
 
         (login, name) = (author.github_login, author.display_name) if author else (login, 'not in system')
 
-        is_admin, is_reviewer, is_author = self._pr_acl(author)
-
-        commands = [
-            ps
-            for m in self.repository.project_id._find_commands(comment['body'] or '')
-            for ps in self._parse_command(m)
-        ]
-
-        if not commands:
-            _logger.info("found no commands in comment of %s (%s) (%s)", author.github_login, author.display_name,
+        commandlines = self.repository.project_id._find_commands(comment['body'] or '')
+        if not commandlines:
+            _logger.info("found no commands in comment of %s (%s) (%s)", login, name,
                  utils.shorten(comment['body'] or '', 50)
             )
             return 'ok'
 
-        if not (is_author or any(cmd == 'override' for cmd, _ in commands)):
+        def feedback(message: Optional[str] = None, close: bool = False, token: Literal['github_token', 'fp_github_token'] = 'github_token'):
+            self.env['runbot_merge.pull_requests.feedback'].create({
+                'repository': self.repository.id,
+                'pull_request': self.number,
+                'message': message,
+                'close': close,
+                'token_field': token,
+            })
+        try:
+            cmds: List[Union[commands.Command, commands.FWCommand]] = [
+                ps
+                for bot, line in commandlines
+                for ps in (commands.parse_mergebot(line) if bot.casefold() == self.repository.project_id.github_prefix.casefold() else commands.parse_forwardbot(line))
+            ]
+        except Exception as e:
+            _logger.info(
+                "error %s while parsing comment of %s (%s): %s",
+                e,
+                author.github_login, author.display_name,
+                utils.shorten(comment['body'] or '', 50),
+                exc_info=True
+            )
+            feedback(message=f"@{login} {e.args[0]}", token='fp_github_token' if len(e.args) >= 2 and e.args[1] else 'github_token')
+            return 'error'
+
+        is_admin, is_reviewer, is_author = self._pr_acl(author)
+
+        if not (is_author or any(isinstance(cmd, commands.Override) for cmd in cmds)):
             # no point even parsing commands
             _logger.info("ignoring comment of %s (%s): no ACL to %s",
                           login, name, self.display_name)
@@ -636,40 +612,13 @@ class PullRequests(models.Model):
             )
             return 'ignored'
 
-        applied, ignored = [], []
-        def reformat(command, param):
-            if param is None:
-                pstr = ''
-            elif isinstance(param, bool):
-                pstr = '+' if param else '-'
-            elif isinstance(param, list):
-                pstr = '=' + ','.join(param)
-            else:
-                pstr = '={}'.format(param)
-
-            return '%s%s' % (command, pstr)
-        msgs = []
-        for command, param in commands:
-            ok = False
-            msg = None
-            if command == 'retry':
-                if is_author:
-                    if self.state == 'error':
-                        ok = True
-                        self.state = 'ready'
-                    else:
-                        msg = "retry makes no sense when the PR is not in error."
-            elif command == 'check':
-                if is_author:
-                    self.env['runbot_merge.fetch_job'].create({
-                        'repository': self.repository.id,
-                        'number': self.number,
-                    })
-                    ok = True
-            elif command == 'review':
-                if self.draft:
+        rejections = []
+        for command in cmds:
+            fwbot, msg = False, None
+            match command:
+                case commands.Approve() if self.draft:
                     msg = "draft PRs can not be approved."
-                elif param and is_reviewer:
+                case commands.Approve() if is_reviewer:
                     oldstate = self.state
                     newstate = RPLUS.get(self.state)
                     if not author.email:
@@ -679,7 +628,6 @@ class PullRequests(models.Model):
                     else:
                         self.state = newstate
                         self.reviewed_by = author
-                        ok = True
                     _logger.debug(
                         "r+ on %s by %s (%s->%s) status=%s message? %s",
                         self.display_name, author.github_login,
@@ -694,7 +642,7 @@ class PullRequests(models.Model):
                             pull_request=self.number,
                             format_args={'user': login, 'pr': self},
                         )
-                elif not param and is_author:
+                case commands.Reject() if is_author:
                     newstate = RMINUS.get(self.state)
                     if self.priority == 0 or newstate:
                         if newstate:
@@ -707,94 +655,128 @@ class PullRequests(models.Model):
                                 format_args={'user': login, 'pr': self},
                             )
                         self.unstage("unreviewed (r-) by %s", login)
-                        ok = True
                     else:
                         msg = "r- makes no sense in the current PR state."
-            elif command == 'delegate':
-                if is_reviewer:
-                    ok = True
-                    Partners = self.env['res.partner']
-                    if param is True:
-                        delegate = self.author
-                    else:
-                        delegate = Partners.search([('github_login', '=', param)]) or Partners.create({
-                            'name': param,
-                            'github_login': param,
-                        })
-                    delegate.write({'delegate_reviewer': [(4, self.id, 0)]})
-            elif command == 'priority':
-                if is_admin:
-                    ok = True
-                    self.priority = param
-                    if param == 0:
-                        self.target.active_staging_id.cancel(
-                            "P=0 on %s by %s, unstaging target %s",
-                            self.display_name,
-                            author.github_login, self.target.name,
-                        )
-            elif command == 'method':
-                if is_reviewer:
-                    self.merge_method = param
-                    ok = True
-                    explanation = next(label for value, label in type(self).merge_method.selection if value == param)
+                case commands.MergeMethod() as command if is_reviewer:
+                    self.merge_method = command.value
+                    explanation = next(label for value, label in type(self).merge_method.selection if value == command.value)
                     self.env.ref("runbot_merge.command.method")._send(
                         repository=self.repository,
                         pull_request=self.number,
                         format_args={'new_method': explanation, 'pr': self, 'user': login},
                     )
-            elif command == 'override':
-                overridable = author.override_rights\
-                    .filtered(lambda r: not r.repository_id or (r.repository_id == self.repository))\
-                    .mapped('context')
-                if param in overridable:
-                    self.overrides = json.dumps({
-                        **json.loads(self.overrides),
-                        param: {
-                            'state': 'success',
-                            'target_url': comment['html_url'],
-                            'description': f"Overridden by @{author.github_login}",
-                        },
-                    })
-                    c = self.env['runbot_merge.commit'].search([('sha', '=', self.head)])
-                    if c:
-                        c.to_check = True
+                case commands.Retry() if is_author:
+                    if self.state == 'error':
+                        self.state = 'ready'
                     else:
-                        c.create({'sha': self.head, 'statuses': '{}'})
-                    ok = True
-                else:
-                    msg = "you are not allowed to override this status."
-            else:
-                # ignore unknown commands
-                continue
+                        msg = "retry makes no sense when the PR is not in error."
+                case commands.Check() if is_author:
+                    self.env['runbot_merge.fetch_job'].create({
+                        'repository': self.repository.id,
+                        'number': self.number,
+                    })
+                case commands.Delegate(users) if is_reviewer:
+                    if not users:
+                        delegates = self.author
+                    else:
+                        delegates = self.env['res.partner']
+                        for login in users:
+                            delegates |= delegates.search([('github_login', '=', login)]) or delegates.create({
+                                'name': login,
+                                'github_login': login,
+                            })
+                    delegates.write({'delegate_reviewer': [(4, self.id, 0)]})
+                case commands.Priority() if is_admin:
+                    self.priority = int(command)
+                    if command is commands.Priority.NUKE:
+                        self.target.active_staging_id.cancel(
+                            "P=0 on %s by %s, unstaging target %s",
+                            self.display_name,
+                            author.github_login, self.target.name,
+                        )
+                case commands.Override(statuses):
+                    for status in statuses:
+                        overridable = author.override_rights\
+                            .filtered(lambda r: not r.repository_id or (r.repository_id == self.repository))\
+                            .mapped('context')
+                        if status in overridable:
+                            self.overrides = json.dumps({
+                                **json.loads(self.overrides),
+                                status: {
+                                    'state': 'success',
+                                    'target_url': comment['html_url'],
+                                    'description': f"Overridden by @{author.github_login}",
+                                },
+                            })
+                            c = self.env['runbot_merge.commit'].search([('sha', '=', self.head)])
+                            if c:
+                                c.to_check = True
+                            else:
+                                c.create({'sha': self.head, 'statuses': '{}'})
+                        else:
+                            msg = f"you are not allowed to override {status!r}."
+                # FW
+                case commands.FWApprove():
+                    fwbot = True
+                    if not self.source_id:
+                        msg = "I can only do this on forward-port PRs and this is not one, see {}.".format(
+                            self.repository.project_id.github_prefix
+                        )
+                    elif not self.parent_id:
+                        msg = "I can only do this on unmodified forward-port PRs, ask {}.".format(
+                            self.repository.project_id.github_prefix
+                        )
+                    else:
+                        merge_bot = self.repository.project_id.github_prefix
+                        # FIXME: classification of messages from child PR :(
+                        # don't update the root ever
+                        for pr in (p for p in self._iter_ancestors() if p.parent_id if p.state in RPLUS):
+                            # only the author is delegated explicitely on the
+                            pr._parse_commands(author, {**comment, 'body': merge_bot + ' r+'}, login)
+                case commands.Close() if self.source_id._pr_acl(author).is_reviewer:
+                    feedback(close=True, token='fp_github_token')
+                case commands.CI(run):
+                    pr = (self.source_id or self)
+                    if pr._pr_acl(author).is_reviewer:
+                        pr.fw_policy = 'ci' if run else 'skipci'
+                        feedback(
+                            message="Waiting for CI to create followup forward-ports." if run else "Not waiting for CI to create followup forward-ports.",
+                            token='fp_github_token',
+                        )
+                    else:
+                        fwbot = True
+                        msg = "you can't configure ci."
+                case commands.Limit(branch):
+                    fwbot = True
+                    if is_author:
+                        ping, msg = self._maybe_update_limit(branch or self.target.name)
+                        if not ping:
+                            feedback(message=msg, token='fp_github_token')
+                            msg = None
+                    else:
+                        msg = "you can't set a forward-port limit."
+                # NO!
+                case _:
+                    msg = f"you can't {command}. Skill issue."
+            if msg is not None:
+                rejections.append((fwbot, msg))
 
-            _logger.info(
-                "%s %s(%s) on %s by %s (%s)",
-                "applied" if ok else "ignored",
-                command, param, self.display_name,
-                author.github_login, author.display_name,
-            )
-            if ok:
-                applied.append(reformat(command, param))
-            else:
-                ignored.append(reformat(command, param))
-                msgs.append(msg or "you can't {}.".format(reformat(command, param)))
+        if not rejections:
+            _logger.info("%s (%s) applied %s", login, name, cmds)
+            return 'applied ' + ', '.join(map(str, cmds))
 
-        if msgs:
-            joiner = ' ' if len(msgs) == 1 else '\n- '
-            msgs.insert(0, "I'm sorry, @{}:".format(login))
-            self.env['runbot_merge.pull_requests.feedback'].create({
-                'repository': self.repository.id,
-                'pull_request': self.number,
-                'message': joiner.join(msgs),
-            })
-
-        msg = []
-        if applied:
-            msg.append('applied ' + ' '.join(applied))
-        if ignored:
-            ignoredstr = ' '.join(ignored)
-            msg.append('ignored ' + ignoredstr)
-        return '\n'.join(msg)
+        self.env.cr.rollback()
+        rejections_list = ''.join(f'\n- {r}' for fw, r in rejections if not fw)
+        fw_rejections_list = ''.join(f'\n- {r}' for fw, r in rejections if fw)
+        _logger.info("%s (%s) tried to apply %s%s", login, name, cmds, rejections_list + fw_rejections_list)
+        footer = '' if len(cmds) == len(rejections) else "\n\nFor your own safety I've ignored everything in your comment."
+        if rejections_list:
+            rejections = ' ' + rejections_list.removeprefix("\n- ") if rejections_list.count('\n- ') == 1 else rejections_list
+            feedback(message=f"@{login}{rejections}{footer}")
+        if fw_rejections_list:
+            rejections = ' ' + fw_rejections_list.removeprefix("\n- ") if fw_rejections_list.count('\n- ') else fw_rejections_list
+            feedback(message=f"@{login}{rejections}{footer}", token='fp_github_token')
+        return 'rejected'
 
     def _pr_acl(self, user):
         if not self:

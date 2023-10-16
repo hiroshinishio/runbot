@@ -101,22 +101,22 @@ def test_disable(env, config, make_repo, users):
         pr = prod.make_pr(target='a', head='branch2')
         prod.post_status(c, 'success', 'legal/cla')
         prod.post_status(c, 'success', 'ci/runbot')
-        pr.post_comment('hansen r+\n%s up to' % bot_name, config['role_reviewer']['token'])
-        pr.post_comment('%s up to b' % bot_name, config['role_reviewer']['token'])
-        pr.post_comment('%s up to foo' % bot_name, config['role_reviewer']['token'])
-        pr.post_comment('%s up to c' % bot_name, config['role_reviewer']['token'])
+        pr.post_comment(f'hansen r+\n{bot_name} up to', config['role_reviewer']['token'])
+        pr.post_comment(f'{bot_name} up to b', config['role_reviewer']['token'])
+        pr.post_comment(f'{bot_name} up to foo', config['role_reviewer']['token'])
+        pr.post_comment(f'{bot_name} up to c', config['role_reviewer']['token'])
     env.run_crons()
 
     # use a set because git webhooks delays might lead to mis-ordered
     # responses and we don't care that much
     assert set(pr.comments) == {
-        (users['reviewer'], "hansen r+\n%s up to" % bot_name),
-        (users['other'], "@%s please provide a branch to forward-port to." % users['reviewer']),
-        (users['reviewer'], "%s up to b" % bot_name),
-        (users['other'], "@%s branch 'b' is disabled, it can't be used as a forward port target." % users['reviewer']),
-        (users['reviewer'], "%s up to foo" % bot_name),
-        (users['other'], "@%s there is no branch 'foo', it can't be used as a forward port target." % users['reviewer']),
-        (users['reviewer'], "%s up to c" % bot_name),
+        (users['reviewer'], f"hansen r+\n{bot_name} up to"),
+        (users['other'], "@{reviewer} please provide a branch to forward-port to.".format_map(users)),
+        (users['reviewer'], f"{bot_name} up to b"),
+        (users['other'], "@{reviewer} branch 'b' is disabled, it can't be used as a forward port target.".format_map(users)),
+        (users['reviewer'], f"{bot_name} up to foo"),
+        (users['other'], "@{reviewer} there is no branch 'foo', it can't be used as a forward port target.".format_map(users)),
+        (users['reviewer'], f"{bot_name} up to c"),
         (users['other'], "Forward-porting to 'c'."),
         seen(env, pr, users),
     }
