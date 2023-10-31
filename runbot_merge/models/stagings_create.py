@@ -65,19 +65,17 @@ def try_staging(branch: Branch) -> Optional[Stagings]:
         return
 
     priority = rows[0][0]
-    if priority == 0 or priority == 1:
-        # p=0 take precedence over all else
-        # p=1 allows merging a fix inside / ahead of a split (e.g. branch
-        # is broken or widespread false positive) without having to cancel
-        # the existing staging
+    if priority == 'alone':
         batched_prs = [pr_ids for _, pr_ids in takewhile(lambda r: r[0] == priority, rows)]
     elif branch.split_ids:
         split_ids = branch.split_ids[0]
         _logger.info("Found split of PRs %s, re-staging", split_ids.mapped('batch_ids.prs'))
         batched_prs = [batch.prs for batch in split_ids.batch_ids]
         split_ids.unlink()
-    else: # p=2
-        batched_prs = [pr_ids for _, pr_ids in takewhile(lambda r: r[0] == priority, rows)]
+    else:
+        # priority, normal; priority = sorted ahead of normal, so always picked
+        # first as long as there's room
+        batched_prs = [pr_ids for _, pr_ids in rows]
 
     original_heads, staging_state = staging_setup(branch, batched_prs)
 
@@ -175,7 +173,7 @@ def ready_prs(for_branch: Branch) -> List[Tuple[int, PullRequests]]:
     env = for_branch.env
     env.cr.execute("""
     SELECT
-      min(pr.priority) as priority,
+      max(pr.priority) as priority,
       array_agg(pr.id) AS match
     FROM runbot_merge_pull_requests pr
     WHERE pr.target = any(%s)
@@ -191,8 +189,9 @@ def ready_prs(for_branch: Branch) -> List[Tuple[int, PullRequests]]:
             ELSE pr.label
         END
     HAVING
-        bool_or(pr.state = 'ready') or bool_or(pr.priority = 0)
-    ORDER BY min(pr.priority), min(pr.id)
+        bool_and(pr.state = 'ready')
+     OR (bool_or(pr.skipchecks) AND bool_and(pr.state != 'error'))
+    ORDER BY max(pr.priority) DESC, min(pr.id)
     """, [for_branch.ids])
     browse = env['runbot_merge.pull_requests'].browse
     return [(p, browse(ids)) for p, ids in env.cr.fetchall()]
@@ -408,7 +407,7 @@ def stage(pr: PullRequests, info: StagingSlice, related_prs: PullRequests) -> Tu
         diff.append(('Message', pr.message, msg))
 
     if invalid:
-        pr.write({**invalid, 'state': 'opened', 'head': pr_head})
+        pr.write({**invalid, 'reviewed_by': False, 'head': pr_head})
         raise exceptions.Mismatch(invalid, diff)
 
     if pr.reviewed_by and pr.reviewed_by.name == pr.reviewed_by.github_login:

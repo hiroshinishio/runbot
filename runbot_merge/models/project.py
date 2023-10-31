@@ -37,11 +37,10 @@ class Project(models.Model):
         required=True,
         default="hanson", # mergebot du bot du bot du~
         help="Prefix (~bot name) used when sending commands from PR "
-             "comments e.g. [hanson retry] or [hanson r+ p=1]",
+             "comments e.g. [hanson retry] or [hanson r+ priority]",
     )
     fp_github_token = fields.Char()
     fp_github_name = fields.Char(store=True, compute="_compute_git_identity")
-    fp_github_email = fields.Char(store=True, compute="_compute_git_identity")
 
     batch_limit = fields.Integer(
         default=8, group_operator=None, help="Maximum number of PRs staged together")
@@ -105,7 +104,7 @@ class Project(models.Model):
     def _compute_git_identity(self):
         s = requests.Session()
         for project in self:
-            if not project.fp_github_token or (project.fp_github_name and project.fp_github_email):
+            if project.fp_github_name or not project.fp_github_token:
                 continue
 
             r0 = s.get('https://api.github.com/user', headers={
@@ -117,25 +116,6 @@ class Project(models.Model):
 
             user = r0.json()
             project.fp_github_name = user['name'] or user['login']
-            if email := user['email']:
-                project.fp_github_email = email
-                continue
-
-            if 'user:email' not in set(re.split(r',\s*', r0.headers['x-oauth-scopes'])):
-                raise UserError("The forward-port github token needs the user:email scope to fetch the bot's identity.")
-            r1 = s.get('https://api.github.com/user/emails', headers={
-                'Authorization': 'token %s' % project.fp_github_token
-            })
-            if not r1.ok:
-                _logger.error("Failed to fetch forward bot emails for project %s: %s", project.name, r1.text or r1.content)
-                continue
-            project.fp_github_email = next((
-                entry['email']
-                for entry in r1.json()
-                if entry['primary']
-            ), None)
-            if not project.fp_github_email:
-                raise UserError("The forward-port bot needs a public or primary email set up.")
 
     def _check_stagings(self, commit=False):
         # check branches with an active staging
@@ -173,18 +153,17 @@ class Project(models.Model):
                 if commit:
                     self.env.cr.commit()
 
-    def _find_commands(self, comment: str) -> List[Tuple[str, str]]:
+    def _find_commands(self, comment: str) -> List[str]:
         """Tries to find all the lines starting (ignoring leading whitespace)
         with either the merge or the forward port bot identifiers.
 
         For convenience, the identifier *can* be prefixed with an ``@`` or
         ``#``, and suffixed with a ``:``.
         """
-        logins = '|'.join(map(re.escape, filter(None, [self.github_prefix, self.fp_github_name])))
         # horizontal whitespace (\s - {\n, \r}), but Python doesn't have \h or \p{Blank}
         h = r'[^\S\r\n]'
         return re.findall(
-            fr'^{h}*[@|#]?({logins})(?:{h}+|:{h}*)(.*)$',
+            fr'^{h}*[@|#]?{self.github_prefix}(?:{h}+|:{h}*)(.*)$',
             comment, re.MULTILINE | re.IGNORECASE)
 
     def _has_branch(self, name):

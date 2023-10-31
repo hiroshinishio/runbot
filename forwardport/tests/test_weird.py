@@ -26,7 +26,6 @@ def make_basic(env, config, make_repo, *, fp_token, fp_remote):
             'github_prefix': 'hansen',
             'fp_github_token': fp_token and config['github']['token'],
             'fp_github_name': 'herbert',
-            'fp_github_email': 'hb@example.com',
             'branch_ids': [
                 (0, 0, {'name': 'a', 'sequence': 2}),
                 (0, 0, {'name': 'b', 'sequence': 1}),
@@ -181,7 +180,7 @@ def test_failed_staging(env, config, make_repo):
     with prod:
         prod.post_status(pr3_id.head, 'success', 'legal/cla')
         prod.post_status(pr3_id.head, 'success', 'ci/runbot')
-        pr3.post_comment('%s r+' % proj.fp_github_name, reviewer)
+        pr3.post_comment('hansen r+', reviewer)
     env.run_crons()
 
     prod.commit('staging.c')
@@ -265,7 +264,6 @@ class TestNotAllBranches:
             'github_prefix': 'hansen',
             'fp_github_token': config['github']['token'],
             'fp_github_name': 'herbert',
-            'fp_github_email': 'hb@example.com',
             'branch_ids': [
                 (0, 0, {'name': 'a', 'sequence': 2}),
                 (0, 0, {'name': 'b', 'sequence': 1}),
@@ -318,7 +316,7 @@ class TestNotAllBranches:
         with a:
             a.post_status(pr2.head, 'success', 'ci/runbot')
             a.get_pr(pr2.number).post_comment(
-                '%s r+' % project.fp_github_name,
+                'hansen r+',
                 config['role_reviewer']['token'])
         env.run_crons()
         assert pr1.staging_id
@@ -357,7 +355,7 @@ class TestNotAllBranches:
         with b:
             b.post_status(pr1.head, 'success', 'ci/runbot')
             b.get_pr(pr1.number).post_comment(
-                '%s r+' % project.fp_github_name,
+                'hansen r+',
                 config['role_reviewer']['token'])
         env.run_crons()
         with a, b:
@@ -580,7 +578,7 @@ def test_new_intermediate_branch(env, config, make_repo):
     with prod, prod2:
         for pr in fps.filtered(lambda p: p.target.name == 'c'):
             get_repo(pr).get_pr(pr.number).post_comment(
-                '%s r+' % project.fp_github_name,
+                'hansen r+',
                 config['role_reviewer']['token'])
     assert all(p.state == 'merged' for p in PRs.browse(sources)),\
         "all sources should be merged"
@@ -627,7 +625,7 @@ def test_author_can_close_via_fwbot(env, config, make_repo):
         pr.open(other_token)
         prod.post_status(c, 'success', 'legal/cla')
         prod.post_status(c, 'success', 'ci/runbot')
-        pr.post_comment('%s close' % project.fp_github_name, other_token)
+        pr.post_comment('hansen close', other_token)
         pr.post_comment('hansen r+', config['role_reviewer']['token'])
     env.run_crons()
     assert pr.state == 'open'
@@ -647,7 +645,7 @@ def test_author_can_close_via_fwbot(env, config, make_repo):
         pr1.close(other_token)
     # use can close via fwbot
     with prod:
-        pr1.post_comment('%s close' % project.fp_github_name, other_token)
+        pr1.post_comment('hansen close', other_token)
     env.run_crons()
     assert pr1.state == 'closed'
     assert pr1_id.state == 'closed'
@@ -660,7 +658,7 @@ def test_skip_ci_all(env, config, make_repo):
         pr = prod.make_pr(target='a', head='change')
         prod.post_status(pr.head, 'success', 'legal/cla')
         prod.post_status(pr.head, 'success', 'ci/runbot')
-        pr.post_comment('%s skipci' % project.fp_github_name, config['role_reviewer']['token'])
+        pr.post_comment('hansen fw=skipci', config['role_reviewer']['token'])
         pr.post_comment('hansen r+', config['role_reviewer']['token'])
     env.run_crons()
     assert env['runbot_merge.pull_requests'].search([
@@ -703,8 +701,8 @@ def test_skip_ci_next(env, config, make_repo):
     pr0_id, pr1_id = env['runbot_merge.pull_requests'].search([], order='number')
     with prod:
         prod.get_pr(pr1_id.number).post_comment(
-            '%s skipci' % project.fp_github_name,
-            config['role_user']['token']
+            'hansen fw=skipci',
+            config['role_reviewer']['token']
         )
     assert pr0_id.fw_policy == 'skipci'
     env.run_crons()

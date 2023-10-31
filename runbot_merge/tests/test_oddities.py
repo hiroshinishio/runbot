@@ -252,3 +252,27 @@ def test_merge_emptying_commits(env, project, make_repo, setreviewers, users, co
     assert pr3.comments[3:] == [
         (users['user'], f"{ping} unable to stage: results in an empty tree when merged, might be the duplicate of a merged PR.")
     ]
+
+def test_force_ready(env, make_repo, project, setreviewers, config):
+    repo = make_repo('repo')
+    project.write({'repo_ids': [(0, 0, {
+        'name': repo.name,
+        'group_id': False,
+        'required_statuses': 'default',
+    })]})
+    setreviewers(*project.repo_ids)
+
+    with repo:
+        [m] = repo.make_commits(None, Commit('initial', tree={'m': 'm'}), ref="heads/master")
+
+        [c] = repo.make_commits(m, Commit('first', tree={'m': 'c1'}), ref="heads/other")
+        pr = repo.make_pr(title='title', body='body', target='master', head=c)
+    env.run_crons()
+
+    pr_id = to_pr(env, pr)
+    pr_id.state = 'ready'
+
+    assert pr_id.state == 'ready'
+    reviewer = env['res.users'].browse([env._uid]).partner_id
+    assert pr_id.reviewed_by == reviewer
+    assert pr_id.overrides

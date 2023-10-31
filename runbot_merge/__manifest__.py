@@ -1,7 +1,7 @@
 {
     'name': 'merge bot',
-    'version': '1.9',
-    'depends': ['contacts', 'website'],
+    'version': '1.11',
+    'depends': ['contacts', 'mail', 'website'],
     'data': [
         'security/security.xml',
         'security/ir.model.access.csv',

@@ -25,7 +25,7 @@ def test_update_pr(env, config, make_repo, users, merge_parent) -> None:
     })
     with prod:
         prod.make_commits('c', Commit('1111', tree={'i': 'a'}), ref='heads/d')
-    
+
     with prod:
         [p_1] = prod.make_commits(
             'a',
@@ -108,15 +108,6 @@ More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
 
     assert pr1_id.head == new_c != pr1_head, "the FP PR should be updated"
     assert not pr1_id.parent_id, "the FP PR should be detached from the original"
-    assert pr1_remote.comments == [
-        seen(env, pr1_remote, users),
-        fp_intermediate, ci_warning, ci_warning,
-        (users['user'], "@%s @%s this PR was modified / updated and has become a normal PR. "
-                        "It should be merged the normal way (via @%s)" % (
-            users['user'], users['reviewer'],
-            pr1_id.repository.project_id.github_prefix
-        )),
-    ], "users should be warned that the PR has become non-FP"
     # NOTE: should the followup PR wait for pr1 CI or not?
     assert pr2_id.head != pr2_head
     assert pr2_id.parent_id == pr1_id, "the followup PR should still be linked"
@@ -132,7 +123,7 @@ More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
         'h': 'a',
         'x': '5'
     }, "the followup FP should also have the update"
-    
+
     with prod:
         prod.post_status(pr2_id.head, 'success', 'ci/runbot')
         prod.post_status(pr2_id.head, 'success', 'legal/cla')
@@ -155,7 +146,7 @@ More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
     pr3_id.write({'parent_id': False, 'detach_reason': "testing"})
     # pump feedback messages
     env.run_crons()
-    
+
     pr3 = prod.get_pr(pr3_id.number)
     assert pr3.comments == [
         seen(env, pr3, users),
@@ -164,14 +155,13 @@ More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
 * {pr2_id.display_name}
 
 To merge the full chain, use
-> @{pr3_id.repository.project_id.fp_github_name} r+
+> @hansen r+
 
 More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
 """),
         (users['user'], f"@{users['user']} @{users['reviewer']} this PR was "
                         f"modified / updated and has become a normal PR. It "
-                        f"should be merged the normal way "
-                        f"(via @{pr3_id.repository.project_id.github_prefix})"
+                        f"must be merged directly."
         )
     ]
 
@@ -196,7 +186,6 @@ More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
                             f"will need to be merged independently as approvals "
                             f"won't cross."),
         ]
-
 
 def test_update_merged(env, make_repo, config, users):
     """ Strange things happen when an FP gets closed / merged but then its
@@ -322,7 +311,6 @@ def test_duplicate_fw(env, make_repo, setreviewers, config, users):
         'github_prefix': 'hansen',
         'fp_github_token': config['github']['token'],
         'fp_github_name': 'herbert',
-        'fp_github_email': 'hb@example.com',
         'branch_ids': [
             (0, 0, {'name': 'master', 'sequence': 0}),
             (0, 0, {'name': 'v3', 'sequence': 1}),
@@ -377,7 +365,7 @@ def test_duplicate_fw(env, make_repo, setreviewers, config, users):
     with repo:
         repo.make_commits('v2', Commit('c0', tree={'z': 'b'}), ref=prv2.ref, make=False)
     env.run_crons()
-    assert pr_ids.mapped('state') == ['merged', 'opened', 'validated', 'validated']
+    assert pr_ids.mapped('state') == ['merged', 'opened', 'opened', 'opened']
     assert repo.read_tree(repo.commit(prv2_id.head)) == {'f': 'c', 'h': 'a', 'z': 'b'}
     assert repo.read_tree(repo.commit(prv3_id.head)) == {'f': 'd', 'i': 'a', 'z': 'b'}
     assert repo.read_tree(repo.commit(prmaster_id.head)) == {'f': 'e', 'z': 'b'}

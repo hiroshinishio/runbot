@@ -24,7 +24,6 @@ import re
 import subprocess
 import tempfile
 import typing
-from functools import reduce
 from operator import itemgetter
 from pathlib import Path
 
@@ -194,62 +193,7 @@ class PullRequests(models.Model):
     head: str
     state: str
 
-    statuses = fields.Text(recursive=True)
-
-    limit_id = fields.Many2one('runbot_merge.branch', help="Up to which branch should this PR be forward-ported")
-
-    parent_id = fields.Many2one(
-        'runbot_merge.pull_requests', index=True,
-        help="a PR with a parent is an automatic forward port"
-    )
-    root_id = fields.Many2one('runbot_merge.pull_requests', compute='_compute_root', recursive=True)
-    source_id = fields.Many2one('runbot_merge.pull_requests', index=True, help="the original source of this FP even if parents were detached along the way")
-    forwardport_ids = fields.One2many('runbot_merge.pull_requests', 'source_id')
     reminder_backoff_factor = fields.Integer(default=-4, group_operator=None)
-    merge_date = fields.Datetime()
-
-    detach_reason = fields.Char()
-
-    fw_policy = fields.Selection([
-        ('ci', "Normal"),
-        ('skipci', "Skip CI"),
-        # ('skipmerge', "Skip merge"),
-    ], required=True, default="ci")
-
-    _sql_constraints = [(
-        'fw_constraint',
-        'check(source_id is null or num_nonnulls(parent_id, detach_reason) = 1)',
-        "fw PRs must either be attached or have a reason for being detached",
-    )]
-
-    refname = fields.Char(compute='_compute_refname')
-    @api.depends('label')
-    def _compute_refname(self):
-        for pr in self:
-            pr.refname = pr.label.split(':', 1)[-1]
-
-    ping = fields.Char(recursive=True)
-
-    @api.depends('source_id.author.github_login', 'source_id.reviewed_by.github_login')
-    def _compute_ping(self):
-        """For forward-port PRs (PRs with a source) the author is the PR bot, so
-        we want to ignore that and use the author & reviewer of the original PR
-        """
-        source = self.source_id
-        if not source:
-            return super()._compute_ping()
-
-        for pr in self:
-            s = ' '.join(
-                f'@{p.github_login}'
-                for p in source.author | source.reviewed_by | self.reviewed_by
-            )
-            pr.ping = s and (s + ' ')
-
-    @api.depends('parent_id.root_id')
-    def _compute_root(self):
-        for p in self:
-            p.root_id = reduce(lambda _, p: p, self._iter_ancestors())
 
     @api.model_create_single
     def create(self, vals):
@@ -269,8 +213,6 @@ class PullRequests(models.Model):
             )[-1].id
         if vals.get('parent_id') and 'source_id' not in vals:
             vals['source_id'] = self.browse(vals['parent_id']).root_id.id
-        if vals.get('state') == 'merged':
-            vals['merge_date'] = fields.Datetime.now()
         return super().create(vals)
 
     def write(self, vals):
@@ -302,8 +244,6 @@ class PullRequests(models.Model):
         if vals.get('parent_id') and 'source_id' not in vals:
             parent = self.browse(vals['parent_id'])
             vals['source_id'] = (parent.source_id or parent).id
-        if vals.get('state') == 'merged':
-            vals['merge_date'] = fields.Datetime.now()
         r = super().write(vals)
         if self.env.context.get('forwardport_detach_warn', True):
             for p, parent in with_parents.items():
@@ -322,14 +262,7 @@ class PullRequests(models.Model):
                         token_field='fp_github_token',
                         format_args={'pr': parent, 'child': p},
                     )
-        for p in closed_fp.filtered(lambda p: p.state != 'closed'):
-            self.env.ref('runbot_merge.forwardport.reopen.detached')._send(
-                repository=p.repository,
-                pull_request=p.number,
-                token_field='fp_github_token',
-                format_args={'pr': p},
-            )
-        if vals.get('state') == 'merged':
+        if vals.get('merge_date'):
             self.env['forwardport.branch_remover'].create([
                 {'pr_id': p.id}
                 for p in self
@@ -570,25 +503,6 @@ class PullRequests(models.Model):
         }
         return sorted(commits, key=lambda c: idx[c['sha']])
 
-    def _iter_ancestors(self):
-        while self:
-            yield self
-            self = self.parent_id
-
-    def _iter_descendants(self):
-        pr = self
-        while pr := self.search([('parent_id', '=', pr.id)]):
-            yield pr
-
-    @api.depends('parent_id.statuses')
-    def _compute_statuses(self):
-        super()._compute_statuses()
-
-    def _get_overrides(self):
-        # NB: assumes _get_overrides always returns an "owned" dict which we can modify
-        p = self.parent_id._get_overrides() if self.parent_id else {}
-        p.update(super()._get_overrides())
-        return p
 
     def _port_forward(self):
         if not self:
@@ -713,7 +627,6 @@ class PullRequests(models.Model):
             new_batch |= new_pr
 
             # allows PR author to close or skipci
-            source.delegates |= source.author
             new_pr.write({
                 'merge_method': pr.merge_method,
                 'source_id': source.id,
@@ -722,9 +635,6 @@ class PullRequests(models.Model):
                 'detach_reason': "conflicts: {}".format(
                     f'\n{conflicts[pr]}\n{conflicts[pr]}'.strip()
                 ) if has_conflicts else None,
-                # Copy author & delegates of source as well as delegates of
-                # previous so they can r+ the new forward ports.
-                'delegates': [(6, False, (source.delegates | pr.delegates).ids)]
             })
             if has_conflicts and pr.parent_id and pr.state not in ('merged', 'closed'):
                 self.env.ref('runbot_merge.forwardport.failure.conflict')._send(
@@ -809,9 +719,8 @@ class PullRequests(models.Model):
             'prs': [(6, 0, new_batch.ids)],
             'active': not has_conflicts,
         })
-        # if we're not waiting for CI, schedule followup immediately
-        if any(p.source_id.fw_policy == 'skipci' for p in b.prs):
-            b.prs[0]._schedule_fp_followup()
+        # try to schedule followup
+        new_batch[0]._schedule_fp_followup()
         return b
 
     def _create_fp_branch(self, target_branch, fp_branch_name, cleanup):
@@ -869,7 +778,7 @@ class PullRequests(models.Model):
         # add target remote
         working_copy.remote(
             'add', 'target',
-            'https://{p.fp_github_name}:{p.fp_github_token}@github.com/{r.fp_remote_target}'.format(
+            'https://{p.fp_github_token}@github.com/{r.fp_remote_target}'.format(
                 r=self.repository,
                 p=project_id
             )

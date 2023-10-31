@@ -129,35 +129,77 @@
                         <h1>
                             <field name="repository"/>#<field name="number"/>
                         </h1>
+                        <h2>
+                          <field name="state"/>
+                          <span attrs="{'invisible': [('blocked', '=', False)]}">
+                            (<field name="blocked"/>)
+                          </span>
+                        </h2>
                     </div>
+                    <!-- massively impactful status items -->
                     <group>
-                        <group>
+                      <group>
+                            <field name="skipchecks" widget="boolean_toggle"/>
+                      </group>
+                      <group>
+                            <field name="cancel_staging" widget="boolean_toggle"/>
+                      </group>
+                    </group>
+                    <!-- main PR metadata -->
+                    <group>
+                        <group name="metadata">
                             <field name="target"/>
-                            <field name="state"/>
-                            <field name="author"/>
-                        </group>
-                        <group>
                             <field name="label"/>
+                            <field name="author"/>
+                            <field name="head"/>
+                        </group>
+                        <group name="merging">
                             <field name="priority"/>
+                            <field name="merge_method"/>
                             <field name="squash"/>
+                            <field name="draft"/>
+                            <field string="Up To" name="limit_id"/>
+                            <field string="Forward-Port Policy" name="fw_policy"/>
                         </group>
                     </group>
-                    <group>
-                        <group colspan="4">
-                            <field name="head"/>
-                            <field name="statuses"/>
+                    <!-- influencers -->
+                    <group string="State">
+                        <group>
+                            <field name="merge_date"/>
+                            <field name="reviewed_by"/>
+                            <field name="error"/>
+                            <field name="closed"/>
                         </group>
-                        <group colspan="4">
+                        <group name="status">
+                            <field name="status"/>
+                            <field name="statuses"/>
                             <field name="overrides"/>
                         </group>
                     </group>
-                    <group>
-                        <group colspan="4" string="Message">
+                    <group string="Forward Porting">
+                      <group>
+                          <field string="Original PR" name="source_id"/>
+                          <field name="parent_id"/>
+                          <field
+                              attrs="{'invisible': [('parent_id', '=', False), ('source_id', '!=', False)]}"
+                              string="Detached because" name="detach_reason" readonly="1"/>
+                      </group>
+                      <group>
+                        <field name="forwardport_ids" nolabel="1" readonly="True">
+                          <tree>
+                            <field name="target" string="Branch"/>
+                            <field name="number"/>
+                          </tree>
+                        </field>
+                      </group>
+                    </group>
+                    <group string="Message">
+                        <group colspan="4">
                             <field name="message" nolabel="1"/>
                         </group>
                     </group>
-                    <group>
-                        <group colspan="4" string="Delegates">
+                    <group string="Delegates">
+                        <group colspan="4">
                             <field name="delegates" nolabel="1">
                                 <tree>
                                     <button type="object" name="get_formview_action" icon="fa-external-link"/>
@@ -168,6 +210,10 @@
                         </group>
                     </group>
                 </sheet>
+                <div class="oe_chatter">
+                    <field name="message_follower_ids" widget="mail_followers"/>
+                    <field name="message_ids" widget="mail_thread"/>
+                </div>
             </form>
         </field>
     </record>

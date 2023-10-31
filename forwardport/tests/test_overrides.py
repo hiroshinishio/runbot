@@ -12,39 +12,45 @@ def test_override_inherited(env, config, make_repo, users):
     """
     repo, other = make_basic(env, config, make_repo)
     project = env['runbot_merge.project'].search([])
+    project.repo_ids.status_ids = [(5, 0, 0), (0, 0, {'context': 'default'})]
     env['res.partner'].search([('github_login', '=', users['reviewer'])])\
         .write({'override_rights': [(0, 0, {
             'repository_id': project.repo_ids.id,
-            'context': 'ci/runbot',
+            'context': 'default',
         })]})
 
     with repo:
-        repo.make_commits('a', Commit('C', tree={'a': '0'}), ref='heads/change')
+        repo.make_commits('a', Commit('pr 1', tree={'a': '0'}), ref='heads/change')
         pr = repo.make_pr(target='a', head='change')
-        repo.post_status('change', 'success', 'legal/cla')
-        pr.post_comment('hansen r+ override=ci/runbot', config['role_reviewer']['token'])
+        pr.post_comment('hansen r+ override=default', config['role_reviewer']['token'])
     env.run_crons()
 
     original = env['runbot_merge.pull_requests'].search([('repository.name', '=', repo.name), ('number', '=', pr.number)])
     assert original.state == 'ready'
+    assert original.limit_id.name == 'c'
 
     with repo:
-        repo.post_status('staging.a', 'success', 'legal/cla')
-        repo.post_status('staging.a', 'success', 'ci/runbot')
+        repo.post_status('staging.a', 'success')
     env.run_crons()
 
-    pr0_id, pr1_id = env['runbot_merge.pull_requests'].search([], order='number')
+    pr0_id, pr1_id, pr2_id = env['runbot_merge.pull_requests'].search([], order='number')
     assert pr0_id == original
-    assert pr1_id.parent_id, pr0_id
+    assert pr0_id.target.name == 'a'
 
-    with repo:
-        repo.post_status(pr1_id.head, 'success', 'legal/cla')
-    env.run_crons()
+    assert pr1_id.parent_id == pr0_id
+    assert pr1_id.number == 2
+    assert pr1_id.target.name == 'b'
     assert pr1_id.state == 'validated'
-    assert statuses(pr1_id) == {'ci/runbot': 'success', 'legal/cla': 'success'}
+    assert statuses(pr1_id) == {'default': 'success'}
+
+    assert pr2_id.parent_id == pr1_id
+    assert pr2_id.target.name == 'c'
+    assert pr2_id.state == 'validated'
+    assert statuses(pr2_id) == {'default': 'success'}
 
     # now we edit the child PR
-    pr_repo, pr_ref = repo.get_pr(pr1_id.number).branch
+    pr1 = repo.get_pr(pr1_id.number)
+    pr_repo, pr_ref = pr1.branch
     with pr_repo:
         pr_repo.make_commits(
             pr1_id.target.name,
@@ -56,6 +62,12 @@ def test_override_inherited(env, config, make_repo, users):
     assert pr1_id.state == 'opened'
     assert not pr1_id.parent_id
     assert statuses(pr1_id) == {}, "should not have any status left"
+    assert statuses(pr2_id) == {}
+
+    with repo:
+        pr1.post_comment('hansen override=default', config['role_reviewer']['token'])
+    assert statuses(pr1_id) == {'default': 'success'}
+    assert statuses(pr2_id) == {'default': 'success'}
 
 def test_override_combination(env, config, make_repo, users):
     """ A forwardport should inherit its parents' overrides, until it's edited.

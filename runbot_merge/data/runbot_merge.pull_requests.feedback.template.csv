@@ -40,7 +40,7 @@ runbot_merge.command.approve.failure,@{user} you may want to rebuild or fix this
 
 user: github login of comment sender
 pr: pr object to which the command was sent"
-runbot_merge.command.unapprove.p0,"PR priority reset to 1, as pull requests with priority 0 ignore review state.","Responds to r- of pr in p=0.
+runbot_merge.command.unapprove.p0,"Skipchecks removed due to r-.","Responds to r- of pr in skipchecks.
 
 user: github login of comment sender
 pr: pr object to which the command was sent"
@@ -107,16 +107,13 @@ pr: PR where update followup conflict happened
 previous: parent PR which triggered the followup
 stdout: markdown-formatted stdout of git, if any
 stderr: markdown-formatted stderr of git, if any"
-runbot_merge.forwardport.update.detached,{pr.ping}this PR was modified / updated and has become a normal PR. It should be merged the normal way (via @{pr.repository.project_id.github_prefix}),"Comment when a forwardport PR gets updated, documents that the PR now needs to be merged the “normal” way.
+runbot_merge.forwardport.update.detached,{pr.ping}this PR was modified / updated and has become a normal PR. It must be merged directly.,"Comment when a forwardport PR gets updated, documents that the PR now needs to be merged the “normal” way.
 
 pr: the pr in question "
 runbot_merge.forwardport.update.parent,{pr.ping}child PR {child.display_name} was modified / updated and has become a normal PR. This PR (and any of its parents) will need to be merged independently as approvals won't cross.,"Sent to an open PR when its direct child has been detached.
 
 pr: the pr
 child: its detached child"
-runbot_merge.forwardport.reopen.detached,{pr.ping}this PR was closed then reopened. It should be merged the normal way (via @{pr.repository.project_id.github_prefix}),"Comment when a forwardport PR gets closed then reopened, documents that the PR is now in a detached state.
-
-pr: the pr in question"
 runbot_merge.forwardport.ci.failed,{pr.ping}{ci} failed on this forward-port PR,"Comment when CI fails on a forward-port PR (which thus won't port any further, for now).
 
 pr: the pr in question
@@ -128,7 +125,7 @@ linked: the linked PR with a different next target
 next: next target for the current pr
 other: next target for the other pr"
 runbot_merge.forwardport.failure.conflict,"{pr.ping}the next pull request ({new.display_name}) is in conflict. You can merge the chain up to here by saying
-> @{pr.repository.project_id.fp_github_name} r+
+> @{pr.repository.project_id.github_prefix} r+
 {footer}","Comment when a forward port was created but is in conflict, warns of that & gives instructions for current PR.
 
 pr: the pr which was just forward ported
@@ -163,7 +160,7 @@ footer: some footer text"
 runbot_merge.forwardport.final,"{pr.ping}this PR targets {pr.target.name} and is the last of the forward-port chain{containing}
 {ancestors}
 To merge the full chain, use
-> @{pr.repository.project_id.fp_github_name} r+
+> @{pr.repository.project_id.github_prefix} r+
 {footer}","Comment when a forward port was created and is the last of a sequence (target the limit branch).
 
 pr: the new forward port

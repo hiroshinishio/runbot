@@ -5,6 +5,8 @@ source branches).
 When preparing a staging, we simply want to ensure branch-matched PRs
 are staged concurrently in all repos
 """
+import functools
+import operator
 import time
 import xmlrpc.client
 
@@ -775,8 +777,8 @@ class TestMultiBatches:
             prs[2][0] | prs[2][1] | prs[3][0] | prs[3][1] | prs[4][0]
 
 def test_urgent(env, repo_a, repo_b, config):
-    """ Either PR of a co-dependent pair being p=0 leads to the entire pair
-    being prioritized
+    """ Either PR of a co-dependent pair being prioritised leads to the entire
+    pair being prioritized
     """
     with repo_a, repo_b:
         make_branch(repo_a, 'master', 'initial', {'a0': 'a'})
@@ -784,18 +786,30 @@ def test_urgent(env, repo_a, repo_b, config):
 
         pr_a = make_pr(repo_a, 'batch', [{'a1': 'a'}, {'a2': 'a'}], user=config['role_user']['token'], reviewer=None, statuses=[])
         pr_b = make_pr(repo_b, 'batch', [{'b1': 'b'}, {'b2': 'b'}], user=config['role_user']['token'], reviewer=None, statuses=[])
-        pr_c = make_pr(repo_a, 'C', [{'c1': 'c', 'c2': 'c'}], user=config['role_user']['token'], reviewer=config['role_reviewer']['token'],)
+        pr_c = make_pr(repo_a, 'C', [{'c1': 'c', 'c2': 'c'}], user=config['role_user']['token'], reviewer=config['role_reviewer']['token'])
 
         pr_a.post_comment('hansen rebase-merge', config['role_reviewer']['token'])
-        pr_b.post_comment('hansen rebase-merge p=0', config['role_reviewer']['token'])
+        pr_b.post_comment('hansen rebase-merge alone skipchecks', config['role_reviewer']['token'])
     env.run_crons()
-    # should have batched pr_a and pr_b despite neither being reviewed or
-    # approved
-    p_a, p_b = to_pr(env, pr_a), to_pr(env, pr_b)
-    p_c = to_pr(env, pr_c)
+
+    p_a, p_b, p_c = to_pr(env, pr_a), to_pr(env, pr_b), to_pr(env, pr_c)
+    assert not p_a.blocked
+    assert not p_b.blocked
+
+    assert p_a.staging_id and p_b.staging_id and p_a.staging_id == p_b.staging_id,\
+        "a and b should be staged despite neither beinbg reviewed or approved"
     assert p_a.batch_id and p_b.batch_id and p_a.batch_id == p_b.batch_id,\
         "a and b should have been recognised as co-dependent"
     assert not p_c.staging_id
+
+    with repo_a:
+        pr_a.post_comment('hansen r-', config['role_reviewer']['token'])
+    env.run_crons()
+    assert not p_b.staging_id.active, "should be unstaged"
+    assert p_b.priority == 'alone', "priority should not be affected anymore"
+    assert not p_b.skipchecks, "r- of linked pr should have un-skipcheck-ed this one"
+    assert p_a.blocked
+    assert p_b.blocked
 
 class TestBlocked:
     def test_merge_method(self, env, repo_a, config):
@@ -854,8 +868,8 @@ class TestBlocked:
     def test_linked_unready(self, env, repo_a, repo_b, config):
         """ Create a PR A linked to a non-ready PR B,
         * A is blocked by default
-        * A is not blocked if A.p=0
-        * A is not blocked if B.p=0
+        * A is not blocked if A.skipci
+        * A is not blocked if B.skipci
         """
         with repo_a, repo_b:
             make_branch(repo_a, 'master', 'initial', {'a0': 'a'})
@@ -868,13 +882,11 @@ class TestBlocked:
         pr_a = to_pr(env, a)
         assert pr_a.blocked
 
-        with repo_a: a.post_comment('hansen p=0', config['role_reviewer']['token'])
+        with repo_a: a.post_comment('hansen skipchecks', config['role_reviewer']['token'])
         assert not pr_a.blocked
+        pr_a.skipchecks = False
 
-        with repo_a: a.post_comment('hansen p=2', config['role_reviewer']['token'])
-        assert pr_a.blocked
-
-        with repo_b: b.post_comment('hansen p=0', config['role_reviewer']['token'])
+        with repo_b: b.post_comment('hansen skipchecks', config['role_reviewer']['token'])
         assert not pr_a.blocked
 
 def test_different_branches(env, project, repo_a, repo_b, config):
@@ -1126,6 +1138,8 @@ def test_freeze_complete(env, project, repo_a, repo_b, repo_c, users, config):
     * check that freeze goes through
     * check that reminder is shown
     * check that new branches are created w/ correct parent & commit info
+    * check that a PRs (freeze and bump) are part of synthetic stagings so
+      they're correctly accounted for in the change history
     """
     project.freeze_reminder = "Don't forget to like and subscribe"
 
@@ -1215,13 +1229,17 @@ def test_freeze_complete(env, project, repo_a, repo_b, repo_c, users, config):
     assert r['res_model'] == 'runbot_merge.project'
     assert r['res_id'] == project.id
 
+    release_pr_ids = functools.reduce(operator.add, release_prs.values())
     # stuff that's done directly
-    for pr_id in release_prs.values():
-        assert pr_id.state == 'merged'
+    assert all(pr_id.state == 'merged' for pr_id in release_pr_ids)
     assert pr_bump_id.state == 'merged'
 
     # stuff that's behind a cron
     env.run_crons()
+
+    # check again to be sure
+    assert all(pr_id.state == 'merged' for pr_id in release_pr_ids)
+    assert pr_bump_id.state == 'merged'
 
     assert pr_rel_a.state == "closed"
     assert pr_rel_a.base['ref'] == '1.1'
@@ -1229,8 +1247,7 @@ def test_freeze_complete(env, project, repo_a, repo_b, repo_c, users, config):
     assert pr_rel_b.base['ref'] == '1.1'
     assert pr_rel_c.state == "closed"
     assert pr_rel_c.base['ref'] == '1.1'
-    for pr_id in release_prs.values():
-        assert pr_id.target.name == '1.1'
+    assert all(pr_id.target.name == '1.1' for pr_id in release_pr_ids)
 
     assert pr_bump_a.state == 'closed'
     assert pr_bump_a.base['ref'] == 'master'

@@ -10,7 +10,7 @@ import requests
 from lxml import html
 
 import odoo
-from utils import _simple_init, seen, re_matches, get_partner, Commit, pr_page, to_pr, part_of
+from utils import _simple_init, seen, re_matches, get_partner, Commit, pr_page, to_pr, part_of, ensure_one
 
 
 @pytest.fixture
@@ -120,6 +120,35 @@ def test_trivial_flow(env, repo, page, users, config):
     assert master.message == "gibberish\n\nblahblah\n\ncloses {repo.name}#1"\
                              "\n\nSigned-off-by: {reviewer.formatted_email}"\
                              .format(repo=repo, reviewer=get_partner(env, users['reviewer']))
+
+    # reverse because the messages are in newest-to-oldest by default
+    # (as that's how you want to read them)
+    messages = reversed([
+        (m.author_id.display_name, m.body, list(zip(
+            m.tracking_value_ids.get_old_display_value(),
+            m.tracking_value_ids.get_new_display_value(),
+        )))
+        for m in pr_id.message_ids
+    ])
+
+    assert list(messages) == [
+        ('OdooBot', '<p>Pull Request created</p>', []),
+        ('OdooBot', f'<p>statuses changed on {c1}</p>', [('Opened', 'Validated')]),
+        # reviewer approved changing the state and setting reviewer as reviewer
+        # plus set merge method
+        ('Reviewer', '', [
+            ('Validated', 'Ready'),
+            ('', 'rebase and merge, using the PR as merge commit message'),
+            ('', 'Reviewer'),
+        ]),
+        # staging succeeded
+        (re_matches(r'.*'), f'<p>staging {st.id} succeeded</p>', [
+            # set merge date
+            (False, pr_id.merge_date + 'Z'),
+            # updated state
+            ('Ready', 'Merged'),
+        ]),
+    ]
 
 class TestCommitMessage:
     def test_commit_simple(self, env, repo, users, config):
@@ -756,9 +785,17 @@ class TestPREdition:
             ('number', '=', prx.number)
         ]).target == branch_1
 
-    def test_retarget_update_commits(self, env, repo):
-        """ Retargeting a PR should update its commits count
+    def test_retarget_update_commits(self, env, project, repo):
+        """ Retargeting a PR should update its commits count, as well as follow
+        the new target's requirements
         """
+        project.repo_ids.write({
+            'status_ids': [
+                (5, 0, 0),
+                (0, 0, {'context': 'a', 'branch_filter': [('name', '=', 'master')]}),
+                (0, 0, {'context': 'b', 'branch_filter': [('name', '!=', 'master')]}),
+            ]
+        })
         branch_1 = env['runbot_merge.branch'].create({
             'name': '1.0',
             'project_id': env['runbot_merge.project'].search([]).id,
@@ -767,29 +804,35 @@ class TestPREdition:
 
         with repo:
             # master is 1 commit ahead of 1.0
-            m = repo.make_commit(None, 'initial', None, tree={'m': 'm'})
-            repo.make_ref('heads/1.0', m)
-            m2 = repo.make_commit(m, 'second', None, tree={'m': 'm2'})
-            repo.make_ref('heads/master', m2)
+            [m] = repo.make_commits(None, Commit('initial', tree={'m': 'm'}), ref='heads/1.0')
+            [m2] = repo.make_commits(m, Commit('second', tree={'m': 'm2'}), ref='heads/master')
 
             # the PR builds on master, but is errorneously targeted to 1.0
-            c = repo.make_commit(m2, 'first', None, tree={'m': 'm3'})
-            prx = repo.make_pr(title='title', body='body', target='1.0', head=c)
+            repo.make_commits(m2, Commit('first', tree={'m': 'm3'}), ref='heads/abranch')
+            prx = repo.make_pr(title='title', body='body', target='1.0', head='abranch')
+            repo.post_status('heads/abranch', 'success', 'a')
+        env.run_crons()
         pr = env['runbot_merge.pull_requests'].search([
             ('repository.name', '=', repo.name),
             ('number', '=', prx.number)
         ])
         assert not pr.squash
+        assert pr.status == 'pending'
+        assert pr.state == 'opened'
 
         with repo:
             prx.base = 'master'
         assert pr.target == master
         assert pr.squash
+        assert pr.status == 'success'
+        assert pr.state == 'validated'
 
         with repo:
             prx.base = '1.0'
         assert pr.target == branch_1
         assert not pr.squash
+        assert pr.status == 'pending'
+        assert pr.state == 'opened'
 
         # check if things also work right when modifying the PR then
         # retargeting (don't see why not but...)
@@ -845,6 +888,7 @@ def test_close_staged(env, repo, config, page):
         ('number', '=', prx.number),
     ])
     env.run_crons()
+    assert pr.reviewed_by
     assert pr.state == 'ready'
     assert pr.staging_id
 
@@ -856,6 +900,18 @@ def test_close_staged(env, repo, config, page):
     assert not env['runbot_merge.stagings'].search([])
     assert pr.state == 'closed'
     assert pr_page(page, prx).cssselect('.alert-light')
+    assert not pr.reviewed_by
+
+    with repo:
+        prx.open()
+    assert pr.state == 'validated'
+    assert not pr.reviewed_by
+
+    with repo:
+        prx.post_comment('hansen r+', config['role_reviewer']['token'])
+    assert pr.reviewed_by
+    pr.write({'closed': True})
+    assert not pr.reviewed_by
 
 def test_forward_port(env, repo, config):
     with repo:
@@ -2130,23 +2186,28 @@ class TestPRUpdate(object):
             repo.update_ref(prx.ref, c2, force=True)
         assert pr.head == c2
 
-    def test_reopen_update(self, env, repo):
+    def test_reopen_update(self, env, repo, config):
         with repo:
             m = repo.make_commit(None, 'initial', None, tree={'m': 'm'})
             repo.make_ref('heads/master', m)
 
             c = repo.make_commit(m, 'fist', None, tree={'m': 'c1'})
             prx = repo.make_pr(title='title', body='body', target='master', head=c)
+            prx.post_comment("hansen r+", config['role_reviewer']['token'])
 
         pr = to_pr(env, prx)
+        assert pr.state == 'approved'
+        assert pr.reviewed_by
         with repo:
             prx.close()
         assert pr.state == 'closed'
         assert pr.head == c
+        assert not pr.reviewed_by
 
         with repo:
             prx.open()
         assert pr.state == 'opened'
+        assert not pr.reviewed_by
 
         with repo:
             c2 = repo.make_commit(c, 'first', None, tree={'m': 'cc'})
@@ -2393,6 +2454,7 @@ class TestPRUpdate(object):
         env.run_crons('runbot_merge.process_updated_commits')
         assert pr_id.message == 'title\n\nbody'
         assert pr_id.state == 'ready'
+        old_reviewer = pr_id.reviewed_by
 
         # TODO: find way to somehow skip / ignore the update_ref?
         with repo:
@@ -2413,10 +2475,12 @@ class TestPRUpdate(object):
         # in a "ready" state
         pr_id.write({
             'head': c,
-            'state': 'ready',
+            'reviewed_by': old_reviewer.id,
             'message': "Something else",
             'target': other.id,
         })
+        assert pr_id.head == c
+        assert pr_id.state == "ready"
 
         env.run_crons()
 
@@ -2425,8 +2489,8 @@ class TestPRUpdate(object):
         assert pr_id.head == c2
         assert pr_id.message == 'title\n\nbody'
         assert pr_id.target.name == 'master'
-        assert pr.comments[-1]['body'] == """\
-@{} @{} we apparently missed updates to this PR and tried to stage it in a state \
+        assert pr.comments[-1]['body'] == f"""\
+@{users['user']} we apparently missed updates to this PR and tried to stage it in a state \
 which might not have been approved.
 
 The properties Head, Target, Message were not correctly synchronized and have been updated.
@@ -2435,8 +2499,8 @@ The properties Head, Target, Message were not correctly synchronized and have be
 
 ```diff
   Head:
-- {}
-+ {}
+- {c}
++ {c2}
   
   Target branch:
 - somethingelse
@@ -2454,7 +2518,7 @@ The properties Head, Target, Message were not correctly synchronized and have be
 Note that we are unable to check the properties Merge Method, Overrides, Draft.
 
 Please check and re-approve.
-""".format(users['user'], users['reviewer'], c, c2)
+"""
 
         # if the head commit doesn't change, that part should still be valid
         with repo:
@@ -2465,8 +2529,8 @@ Please check and re-approve.
 
         assert pr_id.message == 'title\n\nbody'
         assert pr_id.state == 'validated'
-        assert pr.comments[-1]['body'] == """\
-@{} @{} we apparently missed updates to this PR and tried to stage it in a state \
+        assert pr.comments[-1]['body'] == f"""\
+@{users['user']} we apparently missed updates to this PR and tried to stage it in a state \
 which might not have been approved.
 
 The properties Message were not correctly synchronized and have been updated.
@@ -2486,11 +2550,11 @@ The properties Message were not correctly synchronized and have been updated.
 Note that we are unable to check the properties Merge Method, Overrides, Draft.
 
 Please check and re-approve.
-""".format(users['user'], users['reviewer'])
+"""
 
         pr_id.write({
             'head': c,
-            'state': 'ready',
+            'reviewed_by': old_reviewer.id,
             'message': "Something else",
             'target': other.id,
             'draft': True,
@@ -2695,6 +2759,9 @@ class TestBatching(object):
     def test_batching_pressing(self, env, repo, config):
         """ "Pressing" PRs should be selected before normal & batched together
         """
+        # by limiting the batch size to 3 we allow both high-priority PRs, but 
+        # a single normal priority one
+        env['runbot_merge.project'].search([]).batch_limit = 3
         with repo:
             m = repo.make_commit(None, 'initial', None, tree={'a': 'some content'})
             repo.make_ref('heads/master', m)
@@ -2704,51 +2771,47 @@ class TestBatching(object):
 
             pr11 = self._pr(repo, 'Pressing1', [{'x': 'x'}, {'y': 'y'}], user=config['role_user']['token'], reviewer=config['role_reviewer']['token'])
             pr12 = self._pr(repo, 'Pressing2', [{'z': 'z'}, {'zz': 'zz'}], user=config['role_user']['token'], reviewer=config['role_reviewer']['token'])
-            pr11.post_comment('hansen priority=1', config['role_reviewer']['token'])
-            pr12.post_comment('hansen priority=1', config['role_reviewer']['token'])
-
-        pr21, pr22, pr11, pr12 = prs = [to_pr(env, pr) for pr in [pr21, pr22, pr11, pr12]]
-        assert pr21.priority == pr22.priority == 2
-        assert pr11.priority == pr12.priority == 1
-
+            pr11.post_comment('hansen priority', config['role_reviewer']['token'])
+            pr12.post_comment('hansen priority', config['role_reviewer']['token'])
+        # necessary to project commit statuses onto PRs
         env.run_crons()
 
+        pr21, pr22, pr11, pr12 = prs = [to_pr(env, pr) for pr in [pr21, pr22, pr11, pr12]]
+        assert pr11.priority == pr12.priority == 'priority'
+        assert pr21.priority == pr22.priority == 'default'
         assert all(pr.state == 'ready' for pr in prs)
-        assert not pr21.staging_id
+
+        staging = ensure_one(env['runbot_merge.stagings'].search([]))
+        assert staging.pr_ids == pr11 | pr12 | pr21
         assert not pr22.staging_id
-        assert pr11.staging_id
-        assert pr12.staging_id
-        assert pr11.staging_id == pr12.staging_id
 
     def test_batching_urgent(self, env, repo, config):
         with repo:
             m = repo.make_commit(None, 'initial', None, tree={'a': 'some content'})
             repo.make_ref('heads/master', m)
 
-            pr21 = self._pr(repo, 'PR1', [{'a': 'AAA'}, {'b': 'BBB'}], user=config['role_user']['token'], reviewer=config['role_reviewer']['token'])
-            pr22 = self._pr(repo, 'PR2', [{'c': 'CCC'}, {'d': 'DDD'}], user=config['role_user']['token'], reviewer=config['role_reviewer']['token'])
-
             pr11 = self._pr(repo, 'Pressing1', [{'x': 'x'}, {'y': 'y'}], user=config['role_user']['token'], reviewer=config['role_reviewer']['token'])
             pr12 = self._pr(repo, 'Pressing2', [{'z': 'z'}, {'zz': 'zz'}], user=config['role_user']['token'], reviewer=config['role_reviewer']['token'])
-            pr11.post_comment('hansen priority=1', config['role_reviewer']['token'])
-            pr12.post_comment('hansen priority=1', config['role_reviewer']['token'])
+            pr11.post_comment('hansen NOW', config['role_reviewer']['token'])
+            pr12.post_comment('hansen NOW', config['role_reviewer']['token'])
 
-        # stage PR1
+        # stage current PRs
         env.run_crons()
-        p_11, p_12, p_21, p_22 = \
-            [to_pr(env, pr) for pr in [pr11, pr12, pr21, pr22]]
-        assert not p_21.staging_id or p_22.staging_id
-        assert p_11.staging_id and p_12.staging_id
-        assert p_11.staging_id == p_12.staging_id
-        staging_1 = p_11.staging_id
+        p_11, p_12 = \
+            [to_pr(env, pr) for pr in [pr11, pr12]]
+        sm_all = p_11 | p_12
+        staging_1 = sm_all.staging_id
+        assert staging_1
+        assert len(staging_1) == 1
 
         # no statuses run on PR0s
         with repo:
             pr01 = self._pr(repo, 'Urgent1', [{'n': 'n'}, {'o': 'o'}], user=config['role_user']['token'], reviewer=None, statuses=[])
-            pr01.post_comment('hansen priority=0 rebase-merge', config['role_reviewer']['token'])
+            pr01.post_comment('hansen NOW! rebase-merge', config['role_reviewer']['token'])
         p_01 = to_pr(env, pr01)
-        assert p_01.state == 'opened'
-        assert p_01.priority == 0
+        assert p_01.state == 'approved'
+        assert p_01.priority == 'alone'
+        assert p_01.skipchecks == True
 
         env.run_crons()
         # first staging should be cancelled and PR0 should be staged
@@ -2757,8 +2820,89 @@ class TestBatching(object):
         assert not p_11.staging_id and not p_12.staging_id
         assert p_01.staging_id
 
+        # make the staging fail
+        with repo:
+            repo.post_status('staging.master', 'failure', 'ci/runbot')
+        env.run_crons()
+        assert p_01.state == 'error'
+        assert not p_01.staging_id.active
+        staging_2 = ensure_one(sm_all.staging_id)
+        assert staging_2 != staging_1
+
+        with repo:
+            pr01.post_comment('hansen retry', config['role_reviewer']['token'])
+        env.run_crons()
+        # retry should have re-triggered cancel-staging
+        assert not staging_2.active
+        assert p_01.staging_id.active
+
+        # make the staging fail again
+        with repo:
+            repo.post_status('staging.master', 'failure', 'ci/runbot')
+        env.run_crons()
+
+        assert not p_01.staging_id.active
+        assert p_01.state == 'error'
+        staging_3 = ensure_one(sm_all.staging_id)
+        assert staging_3 != staging_2
+
+        # check that updating the PR resets it to ~ready
+        with repo:
+            repo.make_commits(
+                'heads/master',
+                Commit("urgent+", tree={'y': 'es'}),
+                ref="heads/Urgent1",
+            )
+        env.run_crons()
+        assert not staging_3.active
+        assert p_01.state == 'opened'
+        assert p_01.priority == 'alone'
+        assert p_01.skipchecks == True
+        assert p_01.staging_id.active
+
+        # r- should unstage, re-enable the checks and switch off staging
+        # cancellation, but leave the priority
+        with repo:
+            pr01.post_comment("hansen r-", config['role_reviewer']['token'])
+        env.run_crons()
+
+        staging_4 = ensure_one(sm_all.staging_id)
+        assert staging_4 != staging_3
+
+        assert not p_01.staging_id.active
+        assert p_01.state == 'opened'
+        assert p_01.priority == 'alone'
+        assert p_01.skipchecks == False
+        assert p_01.cancel_staging == False
+
+        p_01.cancel_staging = True
+        # FIXME: cancel_staging should only cancel when the PR is or
+        #        transitions to ready
+        # assert staging_4.active
+        # re-staging, should not be necessary
+        env.run_crons()
+
+        staging_5 = ensure_one(sm_all.staging_id)
+        assert staging_5.active
+        # cause the PR to become ready the normal way
+        with repo:
+            pr01.post_comment("hansen r+", config['role_reviewer']['token'])
+            repo.post_status(p_01.head, 'success', 'legal/cla')
+            repo.post_status(p_01.head, 'success', 'ci/runbot')
+        env.run_crons()
+
+        # a cancel_staging pr becoming ready should have cancelled the staging,
+        # and because the PR is `alone` it should... have been restaged alone,
+        # without the ready non-alone PRs
+        assert not sm_all.staging_id.active
+        assert p_01.staging_id.active
+        assert p_01.state == 'ready'
+        assert p_01.priority == 'alone'
+        assert p_01.skipchecks == False
+        assert p_01.cancel_staging == True
+
     def test_batching_urgenter_than_split(self, env, repo, config):
-        """ p=0 PRs should take priority over split stagings (processing
+        """ p=alone PRs should take priority over split stagings (processing
         of a staging having CI-failed and being split into sub-stagings)
         """
         with repo:
@@ -2789,7 +2933,7 @@ class TestBatching(object):
         # during restaging of pr1, create urgent PR
         with repo:
             pr0 = self._pr(repo, 'urgent', [{'a': 'a', 'b': 'b'}], user=config['role_user']['token'], reviewer=None, statuses=[])
-            pr0.post_comment('hansen priority=0', config['role_reviewer']['token'])
+            pr0.post_comment('hansen NOW!', config['role_reviewer']['token'])
         env.run_crons()
 
         # TODO: maybe just deactivate stagings instead of deleting them when canceling?
@@ -2810,7 +2954,7 @@ class TestBatching(object):
         # no statuses run on PR0s
         with repo:
             pr01 = self._pr(repo, 'Urgent1', [{'n': 'n'}, {'o': 'o'}], user=config['role_user']['token'], reviewer=None, statuses=[])
-            pr01.post_comment('hansen priority=0', config['role_reviewer']['token'])
+            pr01.post_comment('hansen NOW!', config['role_reviewer']['token'])
         p_01 = to_pr(env, pr01)
         p_01.state = 'error'
 
@@ -2871,7 +3015,7 @@ class TestBatching(object):
         env.run_crons('runbot_merge.process_updated_commits', 'runbot_merge.merge_cron', 'runbot_merge.staging_cron')
         assert pr2.state == 'merged'
 
-class TestReviewing(object):
+class TestReviewing:
     def test_reviewer_rights(self, env, repo, users, config):
         """Only users with review rights will have their r+ (and other
         attributes) taken in account
@@ -3048,23 +3192,23 @@ class TestReviewing(object):
         ])
 
         with repo:
-            prx.post_review('COMMENT', "hansen priority=1", config['role_reviewer']['token'])
-        assert pr.priority == 1
+            prx.post_review('COMMENT', "hansen priority", config['role_reviewer']['token'])
+        assert pr.priority == 'priority'
         assert pr.state == 'opened'
 
         with repo:
-            prx.post_review('APPROVE', "hansen priority=2", config['role_reviewer']['token'])
-        assert pr.priority == 2
+            prx.post_review('APPROVE', "hansen default", config['role_reviewer']['token'])
+        assert pr.priority == 'default'
         assert pr.state == 'opened'
 
         with repo:
-            prx.post_review('REQUEST_CHANGES', 'hansen priority=1', config['role_reviewer']['token'])
-        assert pr.priority == 1
+            prx.post_review('REQUEST_CHANGES', 'hansen priority', config['role_reviewer']['token'])
+        assert pr.priority == 'priority'
         assert pr.state == 'opened'
 
         with repo:
             prx.post_review('COMMENT', 'hansen r+', config['role_reviewer']['token'])
-        assert pr.priority == 1
+        assert pr.priority == 'priority'
         assert pr.state == 'approved'
 
     def test_no_email(self, env, repo, users, config, partners):
@@ -3101,6 +3245,28 @@ class TestReviewing(object):
         env.run_crons()
         assert to_pr(env, pr).state == 'approved'
 
+    def test_skipchecks(self, env, repo, users, config):
+        """Skipcheck makes the PR immediately ready (if it's not in error or
+        something)
+        """
+        with repo:
+            [m, _] = repo.make_commits(
+                None,
+                Commit("initial", tree={'m': 'm'}),
+                Commit("second", tree={"m2": "m2"}),
+                ref="heads/master"
+            )
+
+            [c1] = repo.make_commits(m, Commit('first', tree={'m': 'c1'}))
+            pr = repo.make_pr(title='title', target='master', head=c1)
+            pr.post_comment('hansen skipchecks', config['role_reviewer']['token'])
+        env.run_crons()
+
+        pr_id = to_pr(env, pr)
+        # assert pr_id.state == 'ready'
+        assert not pr_id.blocked
+        # since the pr is not blocked it should have been staged by the relevant cron
+        assert pr_id.staging_id
 
 class TestUnknownPR:
     """ Sync PRs initially looked excellent but aside from the v4 API not
@@ -3157,7 +3323,7 @@ class TestUnknownPR:
             (users['reviewer'], 'hansen r+'),
             (users['reviewer'], 'hansen r+'),
             seen(env, prx, users),
-            (users['user'], f"@{users['user']} @{users['reviewer']} I didn't know about this PR and had to "
+            (users['user'], f"@{users['user']} I didn't know about this PR and had to "
                             "retrieve its information, you may have to "
                             "re-approve it as I didn't see previous commands."),
         ]
@@ -3213,7 +3379,7 @@ class TestUnknownPR:
             # reviewer is set because fetch replays all the comments (thus
             # setting r+ and reviewer) but then syncs the head commit thus
             # unsetting r+ but leaving the reviewer
-            (users['user'], f"@{users['user']} @{users['reviewer']} I didn't know about this PR and had to retrieve "
+            (users['user'], f"@{users['user']} I didn't know about this PR and had to retrieve "
                             "its information, you may have to re-approve it "
                             "as I didn't see previous commands."),
         ]
@@ -3575,41 +3741,6 @@ class TestRMinus:
 
         assert pr2.state == 'validated', "state should have been reset"
         assert not env['runbot_merge.split'].search([]), "there should be no split left"
-
-    def test_rminus_p0(self, env, repo, config, users):
-        """ In and of itself r- doesn't do anything on p=0 since they bypass
-        approval, so unstage and downgrade to p=1.
-        """
-
-        with repo:
-            m = repo.make_commit(None, 'initial', None, tree={'m': 'm'})
-            repo.make_ref('heads/master', m)
-
-            c = repo.make_commit(m, 'first', None, tree={'m': 'c'})
-            prx = repo.make_pr(title='title', body=None, target='master', head=c)
-            repo.post_status(prx.head, 'success', 'ci/runbot')
-            repo.post_status(prx.head, 'success', 'legal/cla')
-            prx.post_comment('hansen p=0', config['role_reviewer']['token'])
-        env.run_crons()
-
-        pr = env['runbot_merge.pull_requests'].search([
-            ('repository.name', '=', repo.name),
-            ('number', '=', prx.number),
-        ])
-        assert pr.priority == 0
-        assert pr.staging_id
-
-        with repo:
-            prx.post_comment('hansen r-', config['role_reviewer']['token'])
-        env.run_crons()
-        assert not pr.staging_id, "pr should have been unstaged"
-        assert pr.priority == 1, "priority should have been downgraded"
-        assert prx.comments == [
-            (users['reviewer'], 'hansen p=0'),
-            seen(env, prx, users),
-            (users['reviewer'], 'hansen r-'),
-            (users['user'], "PR priority reset to 1, as pull requests with priority 0 ignore review state."),
-        ]
 
 class TestComments:
     def test_address_method(self, repo, env, config):

@@ -339,7 +339,10 @@ class FreezeWizard(models.Model):
             )
 
         all_prs = self.release_pr_ids.pr_id | self.bump_pr_ids.pr_id
-        all_prs.state = 'merged'
+        all_prs.write({
+            'merge_date': fields.Datetime.now(),
+            'reviewed_by': self.env.user.partner_id.id,
+        })
         self.env['runbot_merge.pull_requests.feedback'].create([{
             'repository': pr.repository.id,
             'pull_request': pr.number,

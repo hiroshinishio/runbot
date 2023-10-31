@@ -75,7 +75,6 @@ def make_basic(env, config, make_repo, *, reponame='proj', project_name='myproje
             'github_prefix': 'hansen',
             'fp_github_token': config['github']['token'],
             'fp_github_name': 'herbert',
-            'fp_github_email': 'hb@example.com',
             'branch_ids': [
                 (0, 0, {'name': 'a', 'sequence': 100}),
                 (0, 0, {'name': 'b', 'sequence': 80}),
@@ -145,3 +144,7 @@ def part_of(label, pr_id, *, separator='\n\n'):
     """ Adds the "part-of" pseudo-header in the footer.
     """
     return f'{label}{separator}Part-of: {pr_id.display_name}'
+
+def ensure_one(records):
+    assert len(records) == 1
+    return records

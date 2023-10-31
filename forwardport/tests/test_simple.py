@@ -161,20 +161,19 @@ def test_straightforward_flow(env, config, make_repo, users):
 * %s
 
 To merge the full chain, use
-> @%s r+
+> @hansen r+
 
 More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
 """ % (
             users['other'], users['reviewer'],
             pr1.display_name,
-            project.fp_github_name
     )),
     ]
     with prod:
         prod.post_status(pr2.head, 'success', 'ci/runbot')
         prod.post_status(pr2.head, 'success', 'legal/cla')
 
-        pr2_remote.post_comment('%s r+' % project.fp_github_name, config['role_reviewer']['token'])
+        pr2_remote.post_comment('hansen r+', config['role_reviewer']['token'])
 
     env.run_crons()
 
@@ -317,7 +316,6 @@ def test_empty(env, config, make_repo, users):
     project = env['runbot_merge.project'].search([])
     project.write({
         'fp_github_name': False,
-        'fp_github_email': False,
         'fp_github_token': config['role_other']['token'],
     })
     assert project.fp_github_name == users['other']
@@ -493,7 +491,7 @@ def test_access_rights(env, config, make_repo, users, author, reviewer, delegate
         prod.post_status(pr2.head, 'success', 'ci/runbot')
         prod.post_status(pr2.head, 'success', 'legal/cla')
         prod.get_pr(pr2.number).post_comment(
-            '%s r+' % project.fp_github_name,
+            'hansen r+',
             token=config['role_' + reviewer]['token']
         )
     env.run_crons()
@@ -587,10 +585,10 @@ def test_delegate_fw(env, config, make_repo, users):
         (users['user'], '''@{self_reviewer} @{reviewer} this PR targets c and is the last of the forward-port chain.
 
 To merge the full chain, use
-> @{bot} r+
+> @hansen r+
 
 More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
-'''.format(bot=pr1_id.repository.project_id.fp_github_name, **users)),
+'''.format_map(users)),
         (users['other'], 'hansen r+')
     ]
 
@@ -630,7 +628,7 @@ def test_redundant_approval(env, config, make_repo, users):
     with prod:
         pr1.post_comment('hansen r+', config['role_reviewer']['token'])
     with prod:
-        pr2.post_comment(f'{project.fp_github_name} r+', config['role_reviewer']['token'])
+        pr2.post_comment('hansen r+', config['role_reviewer']['token'])
     env.run_crons()
 
     assert pr1.comments == [
@@ -742,7 +740,7 @@ More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
     # ok main1 PRs
     with main1:
         validate_all([main1], [pr1c.head])
-        main1.get_pr(pr1c.number).post_comment('%s r+' % project.fp_github_name, config['role_reviewer']['token'])
+        main1.get_pr(pr1c.number).post_comment('hansen r+', config['role_reviewer']['token'])
     env.run_crons()
 
     # check that the main1 PRs are ready but blocked on the main2 PRs
@@ -754,7 +752,7 @@ More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
     # ok main2 PRs
     with main2:
         validate_all([main2], [pr2c.head])
-        main2.get_pr(pr2c.number).post_comment('%s r+' % project.fp_github_name, config['role_reviewer']['token'])
+        main2.get_pr(pr2c.number).post_comment('hansen r+', config['role_reviewer']['token'])
     env.run_crons()
 
     env['runbot_merge.stagings'].search([]).mapped('target.display_name')
@@ -862,27 +860,8 @@ More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
         with prod:
             pr1.open()
         assert pr1_id.state == 'validated'
-        env.run_crons()
-        assert pr1.comments[-1] == (
-            users['user'],
-            "@{} @{} this PR was closed then reopened. "
-            "It should be merged the normal way (via @{})".format(
-                users['user'],
-                users['reviewer'],
-                project.github_prefix,
-            )
-        )
-
-        with prod:
-            pr1.post_comment(f'{project.fp_github_name} r+', config['role_reviewer']['token'])
-        env.run_crons()
-        assert pr1.comments[-1] == (
-            users['user'],
-            "@{} I can only do this on unmodified forward-port PRs, ask {}.".format(
-                users['reviewer'],
-                project.github_prefix,
-            ),
-        )
+        assert not pr1_id.parent_id
+        assert not pr2_id.parent_id
 
     def test_close_disabled(self, env, make_repo, users, config):
         """ If an fwport's target is disabled and its branch is closed, it
@@ -937,7 +916,7 @@ More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
 * {pr2_id.display_name}
 
 To merge the full chain, use
-> @herbert r+
+> @hansen r+
 
 More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
 """.format(pr2_id=pr2_id, **users)),
@@ -1063,13 +1042,13 @@ class TestRecognizeCommands:
             ('number', '=', pr.number),
         ])
 
+    # FIXME: remove / merge into mergebot tests
     def test_botname_casing(self, env, config, make_repo):
         """ Test that the botname is case-insensitive as people might write
         bot names capitalised or titlecased or uppercased or whatever
         """
         repo, pr, pr_id = self.make_pr(env, config, make_repo)
         assert pr_id.state == 'opened'
-        botname = env['runbot_merge.project'].search([]).fp_github_name
         [a] = env['runbot_merge.branch'].search([
             ('name', '=', 'a')
         ])
@@ -1078,27 +1057,27 @@ class TestRecognizeCommands:
         ])
 
         names = [
-            botname,
-            botname.upper(),
-            botname.capitalize(),
-            sPeNgBaB(botname),
+            "hansen",
+            "HANSEN",
+            "Hansen",
+            sPeNgBaB("hansen"),
         ]
 
         for n in names:
             assert pr_id.limit_id == c
             with repo:
-                pr.post_comment('@%s up to a' % n, config['role_reviewer']['token'])
+                pr.post_comment(f'@{n} up to a', config['role_reviewer']['token'])
             assert pr_id.limit_id == a
             # reset state
             pr_id.write({'limit_id': c.id})
 
+    # FIXME: remove / merge into mergebot tests
     @pytest.mark.parametrize('indent', ['', '\N{SPACE}', '\N{SPACE}'*4, '\N{TAB}'])
     def test_botname_indented(self, env, config, make_repo, indent):
         """ matching botname should ignore leading whitespaces
         """
         repo, pr, pr_id = self.make_pr(env, config, make_repo)
         assert pr_id.state == 'opened'
-        botname = env['runbot_merge.project'].search([]).fp_github_name
         [a] = env['runbot_merge.branch'].search([
             ('name', '=', 'a')
         ])
@@ -1108,5 +1087,5 @@ class TestRecognizeCommands:
 
         assert pr_id.limit_id == c
         with repo:
-            pr.post_comment('%s@%s up to a' % (indent, botname), config['role_reviewer']['token'])
+            pr.post_comment(f'{indent}@hansen up to a', config['role_reviewer']['token'])
         assert pr_id.limit_id == a

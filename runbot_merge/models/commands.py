@@ -1,7 +1,9 @@
 import enum
-from collections import abc
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Iterator, List, Optional, Union
+from functools import partial
+from operator import contains
+from typing import Callable, List, Optional, Union
 
 
 def tokenize(line: str) -> Iterator[str]:
@@ -21,6 +23,7 @@ def tokenize(line: str) -> Iterator[str]:
     if cur:
         yield cur
 
+
 def normalize(it: Iterator[str]) -> Iterator[str]:
     """Converts shorthand tokens to expanded version
     """
@@ -31,14 +34,12 @@ def normalize(it: Iterator[str]) -> Iterator[str]:
             case 'r-':
                 yield 'review'
                 yield '-'
-            case 'p':
-                yield 'priority'
             case _:
                 yield t
 
 
 @dataclass
-class Peekable(abc.Iterator[str]):
+class Peekable(Iterator[str]):
     it: Iterator[str]
     memo: Optional[str] = None
 
@@ -57,22 +58,23 @@ class Peekable(abc.Iterator[str]):
         return self.memo
 
 
-def assert_next(it: Iterator[str], val: str):
-    if (actual := next(it, None)) != val:
-        raise CommandError(f"expected {val!r}, got {actual!r}")
-
-
 class CommandError(Exception):
     pass
 
 
 class Approve:
-    def __str__(self):
+    def __init__(self, ids: Optional[List[int]] = None) -> None:
+        self.ids = ids
+
+    def __str__(self) -> str:
+        if self.ids is not None:
+            ids = ','.join(map(str, self.ids))
+            return f"r={ids}"
         return 'review+'
 
 
 class Reject:
-    def __str__(self):
+    def __str__(self) -> str:
         return 'review-'
 
 
@@ -82,17 +84,17 @@ class MergeMethod(enum.Enum):
     REBASE_MERGE = 'rebase-merge'
     MERGE = 'merge'
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.value
 
 
 class Retry:
-    def __str__(self):
+    def __str__(self) -> str:
         return 'retry'
 
 
 class Check:
-    def __str__(self):
+    def __str__(self) -> str:
         return 'check'
 
 
@@ -100,7 +102,7 @@ class Check:
 class Override:
     statuses: List[str] = field(default_factory=list)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"override={','.join(self.statuses)}"
 
 
@@ -108,124 +110,199 @@ class Override:
 class Delegate:
     users: List[str] = field(default_factory=list)
 
-    def __str__(self):
+    def __str__(self) -> str:
         if not self.users:
             return 'delegate+'
         return f"delegate={','.join(self.users)}"
 
 
-class Priority(enum.IntEnum):
-    NUKE = 0
-    PRIORITIZE = 1
-    DEFAULT = 2
+class Priority(enum.Enum):
+    DEFAULT = enum.auto()
+    PRIORITY = enum.auto()
+    ALONE = enum.auto()
+
+    def __str__(self) -> str:
+        return self.name.lower()
 
 
-Command = Union[Approve, Reject, MergeMethod, Retry, Check, Override, Delegate, Priority]
+class CancelStaging:
+    def __str__(self) -> str:
+        return "cancel=staging"
 
 
-def parse_mergebot(line: str) -> Iterator[Command]:
-    it = Peekable(normalize(tokenize(line)))
-    for token in it:
-        match token:
-            case 'review':
-                match next(it):
-                    case '+':
-                        yield Approve()
-                    case '-':
-                        yield Reject()
-                    case t:
-                        raise CommandError(f"unknown review {t!r}")
-            case 'squash':
-                yield MergeMethod.SQUASH
-            case 'rebase-ff':
-                yield MergeMethod.REBASE_FF
-            case 'rebase-merge':
-                yield MergeMethod.REBASE_MERGE
-            case 'merge':
-                yield MergeMethod.MERGE
-            case 'retry':
-                yield Retry()
-            case 'check':
-                yield Check()
-            case 'override':
-                assert_next(it, '=')
-                ci = [next(it)]
-                while it.peek() == ',':
-                    next(it)
-                    ci.append(next(it))
-                yield Override(ci)
-            case 'delegate':
-                match next(it):
-                    case '+':
-                        yield Delegate()
-                    case '=':
-                        delegates = [next(it).lstrip('#@')]
-                        while it.peek() == ',':
-                            next(it)
-                            delegates.append(next(it).lstrip('#@'))
-                        yield Delegate(delegates)
-                    case d:
-                        raise CommandError(f"unknown delegation {d!r}")
-            case 'priority':
-                assert_next(it, '=')
-                yield Priority(int(next(it)))
-            case c:
-                raise CommandError(f"unknown command {c!r}")
+class SkipChecks:
+    def __str__(self) -> str:
+        return 'skipchecks'
 
 
-class FWApprove:
-    def __str__(self):
-        return 'review+'
+class FW(enum.Enum):
+    DEFAULT = enum.auto()
+    SKIPCI = enum.auto()
+    SKIPMERGE = enum.auto()
 
-
-@dataclass
-class CI:
-    run: bool
-    def __str__(self):
-        return 'ci' if self.run else 'skipci'
+    def __str__(self) -> str:
+        return f'fw={self.name.lower()}'
 
 
 @dataclass
 class Limit:
     branch: Optional[str]
 
-    def __str__(self):
+    def __str__(self) -> str:
         if self.branch is None:
             return 'ignore'
         return f'up to {self.branch}'
 
 
 class Close:
-    def __str__(self):
+    def __str__(self) -> str:
         return 'close'
 
 
-FWCommand = Union[FWApprove, CI, Limit, Close]
+Command = Union[
+    Approve,
+    CancelStaging,
+    Close,
+    Check,
+    Delegate,
+    FW,
+    Limit,
+    MergeMethod,
+    Override,
+    Priority,
+    Reject,
+    Retry,
+    SkipChecks,
+]
 
 
-def parse_forwardbot(line: str) -> Iterator[FWCommand]:
-    it = Peekable(normalize(tokenize(line)))
-    for token in it:
-        match token:
-            case 'review':
-                match next(it):
-                    case '+':
-                        yield FWApprove()
-                    case t:
-                        raise CommandError(f"unknown review {t!r}", True)
-            case 'ci':
-                yield CI(True)
-            case 'skipci':
-                yield CI(False)
-            case 'ignore':
-                yield Limit(None)
-            case 'up':
-                assert_next(it, 'to')
-                if limit := next(it, None):
-                    yield Limit(limit)
+class Parser:
+    def __init__(self, line: str) -> None:
+        self.it = Peekable(normalize(tokenize(line)))
+
+    def __iter__(self) -> Iterator[Command]:
+        for token in self.it:
+            if token.startswith("NOW"):
+                # any number of ! is allowed
+                if token.startswith("NOW!"):
+                    yield Priority.ALONE
+                elif token == "NOW":
+                    yield Priority.PRIORITY
                 else:
-                    raise CommandError("please provide a branch to forward-port to.", True)
-            case 'close':
-                yield Close()
-            case c:
-                raise CommandError(f"unknown command {c!r}", True)
+                    raise CommandError(f"unknown command {token!r}")
+                yield SkipChecks()
+                yield CancelStaging()
+                continue
+
+            handler = getattr(type(self), f'parse_{token.replace("-", "_")}', None)
+            if handler:
+                yield handler(self)
+            elif '!' in token:
+                raise CommandError("skill issue, noob")
+            else:
+                raise CommandError(f"unknown command {token!r}")
+
+    def assert_next(self, val: str) -> None:
+        if (actual := next(self.it, None)) != val:
+            raise CommandError(f"expected {val!r}, got {actual!r}")
+
+    def check_next(self, val: str) -> bool:
+        if self.it.peek() == val:
+            self.it.memo = None # consume peeked value
+            return True
+        return False
+
+    def parse_review(self) -> Union[Approve, Reject]:
+        t = next(self.it, None)
+        if t == '+':
+            return Approve()
+        if t == '-':
+            return Reject()
+        if t == '=':
+            t = next(self.it, None)
+            if not (t and t.isdecimal()):
+                raise CommandError(f"expected PR ID to approve, found {t!r}")
+
+            ids = [int(t)]
+            while self.check_next(','):
+                id = next(self.it, None)
+                if id and id.isdecimal():
+                    ids.append(int(id))
+                else:
+                    raise CommandError(f"expected PR ID to approve, found {id!r}")
+            return Approve(ids)
+
+        raise CommandError(f"unknown review {t!r}")
+
+    def parse_squash(self) -> MergeMethod:
+        return MergeMethod.SQUASH
+
+    def parse_rebase_ff(self) -> MergeMethod:
+        return MergeMethod.REBASE_FF
+
+    def parse_rebase_merge(self) -> MergeMethod:
+        return MergeMethod.REBASE_MERGE
+
+    def parse_merge(self) -> MergeMethod:
+        return MergeMethod.MERGE
+
+    def parse_retry(self) -> Retry:
+        return Retry()
+
+    def parse_check(self) -> Check:
+        return Check()
+
+    def parse_override(self) -> Override:
+        self.assert_next('=')
+        ci = [next(self.it)]
+        while self.check_next(','):
+            ci.append(next(self.it))
+        return Override(ci)
+
+    def parse_delegate(self) -> Delegate:
+        match next(self.it, None):
+            case '+':
+                return Delegate()
+            case '=':
+                delegates = [next(self.it).lstrip('#@')]
+                while self.check_next(','):
+                    delegates.append(next(self.it).lstrip('#@'))
+                return Delegate(delegates)
+            case d:
+                raise CommandError(f"unknown delegation {d!r}")
+
+    def parse_default(self) -> Priority:
+        return Priority.DEFAULT
+
+    def parse_priority(self) -> Priority:
+        return Priority.PRIORITY
+
+    def parse_alone(self) -> Priority:
+        return Priority.ALONE
+
+    def parse_cancel(self) -> CancelStaging:
+        return CancelStaging()
+
+    def parse_skipchecks(self) -> SkipChecks:
+        return SkipChecks()
+
+    def parse_fw(self) -> FW:
+        self.assert_next('=')
+        f = next(self.it, "")
+        try:
+            return FW[f.upper()]
+        except KeyError:
+            raise CommandError(f"unknown fw configuration {f or None!r}") from None
+
+    def parse_ignore(self) -> Limit:
+        return Limit(None)
+
+    def parse_up(self) -> Limit:
+        self.assert_next('to')
+        if limit := next(self.it, None):
+            return Limit(limit)
+        else:
+            raise CommandError("please provide a branch to forward-port to.")
+
+    def parse_close(self) -> Close:
+        return Close()
