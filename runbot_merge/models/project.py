@@ -24,6 +24,7 @@ class Project(models.Model):
         help="Branches of all project's repos which are managed by the merge bot. Also "\
         "target branches of PR this project handles."
     )
+    staging_enabled = fields.Boolean(default=True)
 
     ci_timeout = fields.Integer(
         default=60, required=True, group_operator=None,
@@ -141,6 +142,7 @@ class Project(models.Model):
             ('active_staging_id', '=', False),
             ('active', '=', True),
             ('staging_enabled', '=', True),
+            ('project_id.staging_enabled', '=', True),
         ]):
             try:
                 with self.env.cr.savepoint(), \

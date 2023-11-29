@@ -1716,7 +1716,7 @@ class Stagings(models.Model):
     def cancel(self, reason, *args):
         self = self.filtered('active')
         if not self:
-            return
+            return False
 
         _logger.info("Cancelling staging %s: " + reason, self, *args)
         self.mapped('batch_ids').write({'active': False})
@@ -1725,6 +1725,7 @@ class Stagings(models.Model):
             'state': 'cancelled',
             'reason': reason % args,
         })
+        return True
 
     def fail(self, message, prs=None):
         _logger.info("Staging %s failed: %s", self, message)
@@ -1745,6 +1746,7 @@ class Stagings(models.Model):
             'state': 'failure',
             'reason': message,
         })
+        return True
 
     def try_splitting(self):
         batches = len(self.batch_ids)
