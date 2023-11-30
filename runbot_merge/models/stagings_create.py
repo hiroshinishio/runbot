@@ -61,21 +61,67 @@ def try_staging(branch: Branch) -> Optional[Stagings]:
         for p, prs in ready_prs(for_branch=branch)
         if not any(prs.mapped('blocked'))
     ]
-    if not rows:
-        return
 
-    priority = rows[0][0]
+    def log(label, batches):
+        _logger.info(label, ', '.join(
+            p.display_name
+            for batch in batches
+            for p in batch
+        ))
+
+    priority = rows[0][0] if rows else None
     if priority == 'alone':
         batched_prs = [pr_ids for _, pr_ids in takewhile(lambda r: r[0] == priority, rows)]
-    elif branch.split_ids:
-        split_ids = branch.split_ids[0]
-        _logger.info("Found split of PRs %s, re-staging", split_ids.mapped('batch_ids.prs'))
-        batched_prs = [batch.prs for batch in split_ids.batch_ids]
-        split_ids.unlink()
+        log("staging high-priority PRs %s", batched_prs)
+    elif branch.project_id.staging_priority == 'default':
+        if branch.split_ids:
+            split_ids = branch.split_ids[0]
+            batched_prs = [batch.prs for batch in split_ids.batch_ids]
+            split_ids.unlink()
+            log("staging split PRs %s (prioritising splits)", batched_prs)
+        else:
+            # priority, normal; priority = sorted ahead of normal, so always picked
+            # first as long as there's room
+            batched_prs = [pr_ids for _, pr_ids in rows]
+            log("staging ready PRs %s (prioritising splits)", batched_prs)
+    elif branch.project_id.staging_priority == 'ready':
+        # splits are ready by definition, we need to exclude them from the
+        # ready rows otherwise we'll re-stage the splits so if an error is legit
+        # we cycle forever
+        # FIXME: once the batches are less shit, store this durably on the
+        #        batches and filter out when fetching readies (?)
+        split_batches = {batch.prs for batch in branch.split_ids.batch_ids}
+        ready = [pr_ids for _, pr_ids in rows if pr_ids not in split_batches]
+
+        if ready:
+            batched_prs = ready
+            log("staging ready PRs %s (prioritising ready)", batched_prs)
+        else:
+            split_ids = branch.split_ids[:1]
+            batched_prs = [batch.prs for batch in split_ids.batch_ids]
+            split_ids.unlink()
+            log("staging split PRs %s (prioritising ready)", batched_prs)
     else:
-        # priority, normal; priority = sorted ahead of normal, so always picked
-        # first as long as there's room
-        batched_prs = [pr_ids for _, pr_ids in rows]
+        assert branch.project_id.staging_priority == 'largest'
+        # splits are ready by definition, we need to exclude them from the
+        # ready rows otherwise ready always wins but we re-stage the splits, so
+        # if an error is legit we'll cycle forever
+        split_batches = {batch.prs for batch in branch.split_ids.batch_ids}
+        ready = [pr_ids for _, pr_ids in rows if pr_ids not in split_batches]
+
+        maxsplit = max(branch.split_ids, key=lambda s: len(s.batch_ids), default=branch.env['runbot_merge.split'])
+        _logger.info("largest split = %d, ready = %d", len(maxsplit.batch_ids), len(ready))
+        # bias towards splits if len(ready) = len(batch_ids)
+        if len(maxsplit.batch_ids) >= len(ready):
+            batched_prs = [batch.prs for batch in maxsplit.batch_ids]
+            maxsplit.unlink()
+            log("staging split PRs %s (prioritising largest)", batched_prs)
+        else:
+            batched_prs = ready
+            log("staging ready PRs %s (prioritising largest)", batched_prs)
+
+    if not batched_prs:
+        return
 
     original_heads, staging_state = staging_setup(branch, batched_prs)
 

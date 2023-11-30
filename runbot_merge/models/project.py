@@ -25,6 +25,11 @@ class Project(models.Model):
         "target branches of PR this project handles."
     )
     staging_enabled = fields.Boolean(default=True)
+    staging_priority = fields.Selection([
+        ('default', "Splits over ready PRs"),
+        ('largest', "Largest of split and ready PRs"),
+        ('ready', "Ready PRs over split"),
+    ], default="default", required=True)
 
     ci_timeout = fields.Integer(
         default=60, required=True, group_operator=None,
