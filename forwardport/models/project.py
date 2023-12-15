@@ -810,6 +810,7 @@ class PullRequests(models.Model):
         # one of the PRs in the batch fails is huge problem, though this loop
         # only concerns itself with the creation of the followup objects so...
         new_batch = self.browse(())
+        self.env.cr.execute('LOCK runbot_merge_pull_requests IN SHARE MODE')
         for pr in self:
             owner, _ = pr.repository.fp_remote_target.split('/', 1)
             source = pr.source_id or pr
@@ -821,7 +822,6 @@ class PullRequests(models.Model):
             )
 
             title, body = re.match(r'(?P<title>[^\n]+)\n*(?P<body>.*)', message, flags=re.DOTALL).groups()
-            self.env.cr.execute('LOCK runbot_merge_pull_requests IN SHARE MODE')
             r = gh.post(f'https://api.github.com/repos/{pr.repository.name}/pulls', json={
                 'base': target.name,
                 'head': f'{owner}:{new_branch}',
@@ -866,10 +866,6 @@ class PullRequests(models.Model):
                     token_field='fp_github_token',
                     format_args={'source': source, 'pr': pr, 'new': new_pr, 'footer': footer},
                 )
-            # not great but we probably want to avoid the risk of the webhook
-            # creating the PR from under us. There's still a "hole" between
-            # the POST being executed on gh and the commit but...
-            self.env.cr.commit()
 
         for pr, new_pr in zip(self, new_batch):
             (h, out, err, hh) = conflicts.get(pr) or (None, None, None, None)
