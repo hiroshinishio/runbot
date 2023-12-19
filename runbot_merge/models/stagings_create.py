@@ -15,7 +15,8 @@ from werkzeug.datastructures import Headers
 
 from odoo import api, models, fields
 from odoo.tools import OrderedSet
-from .pull_requests import Branch, Stagings, PullRequests, Repository, Batch
+from .pull_requests import Branch, Stagings, PullRequests, Repository
+from .batch import Batch
 from .. import exceptions, utils, github, git
 
 WAIT_FOR_VISIBILITY = [10, 10, 10, 10]
@@ -285,8 +286,10 @@ def stage_batches(branch: Branch, batched_prs: List[PullRequests], staging_state
         if len(staged) >= batch_limit:
             break
 
+        assert len(bs := {p.batch_id for p in batch}) == 1,\
+            f"expected all PRs to have the same batch, got {bs}"
         try:
-            staged |= stage_batch(env, batch, staging_state)
+            staged |= stage_batch(env, batch[0].batch_id, staging_state)
         except exceptions.MergeError as e:
             pr = e.args[0]
             _logger.info("Failed to stage %s into %s", pr.display_name, branch.name, exc_info=True)
@@ -335,16 +338,18 @@ def parse_refs_smart(read: Callable[[int], bytes]) -> Iterator[Tuple[str, str]]:
 UNCHECKABLE = ['merge_method', 'overrides', 'draft']
 
 
-def stage_batch(env: api.Environment, prs: PullRequests, staging: StagingState) -> Batch:
+def stage_batch(env: api.Environment, batch: Batch, staging: StagingState):
     """Stages the batch represented by the ``prs`` recordset, onto the
     current corresponding staging heads.
 
     Alongside returning the newly created batch, updates ``staging[*].head``
     in-place on success. On failure, the heads should not be touched.
+
+    May return an empty recordset on some non-fatal failures.
     """
     new_heads: Dict[PullRequests, str] = {}
     pr_fields = env['runbot_merge.pull_requests']._fields
-    for pr in prs:
+    for pr in batch.prs:
         info = staging[pr.repository]
         _logger.info(
             "Staging pr %s for target %s; method=%s",
@@ -353,7 +358,7 @@ def stage_batch(env: api.Environment, prs: PullRequests, staging: StagingState) 
         )
 
         try:
-            method, new_heads[pr] = stage(pr, info, related_prs=(prs - pr))
+            method, new_heads[pr] = stage(pr, info, related_prs=(batch.prs - pr))
             _logger.info(
                 "Staged pr %s to %s by %s: %s -> %s",
                 pr.display_name, pr.target.name, method,
@@ -382,10 +387,7 @@ def stage_batch(env: api.Environment, prs: PullRequests, staging: StagingState) 
     # update meta to new heads
     for pr, head in new_heads.items():
         staging[pr.repository].head = head
-    return env['runbot_merge.batch'].create({
-        'target': prs[0].target.id,
-        'prs': [(4, pr.id, 0) for pr in prs],
-    })
+    return batch
 
 def format_for_difflib(items: Iterator[Tuple[str, object]]) -> Iterator[str]:
     """ Bit of a pain in the ass because difflib really wants

@@ -157,11 +157,7 @@ class Project(models.Model):
             # the parents linked list, so it has a special type
             for _, cs in groupby(candidates, key=lambda p: p.label):
                 self.env['forwardport.batches'].create({
-                    'batch_id': self.env['runbot_merge.batch'].create({
-                        'target': before[-1].id,
-                        'prs': [(4, c.id, 0) for c in cs],
-                        'active': False,
-                    }).id,
+                    'batch_id': cs[0].batch_id.id,
                     'source': 'insert',
                 })
 
@@ -321,7 +317,7 @@ class PullRequests(models.Model):
         addendum = ''
         # check if tip was queued for forward porting, try to cancel if we're
         # supposed to stop here
-        if real_limit == tip.target and (task := self.env['forwardport.batches'].search([('batch_id', 'in', tip.batch_ids.ids)])):
+        if real_limit == tip.target and (task := self.env['forwardport.batches'].search([('batch_id', '=', tip.batch_id.id)])):
             try:
                 with self.env.cr.savepoint():
                     self.env.cr.execute(
@@ -343,13 +339,13 @@ class PullRequests(models.Model):
             # resume
             if tip.state == 'merged':
                 self.env['forwardport.batches'].create({
-                    'batch_id': tip.batch_ids.sorted('id')[-1].id,
+                    'batch_id': tip.batch_id.id,
                     'source': 'fp' if tip.parent_id else 'merge',
                 })
                 resumed = tip
             else:
                 # reactivate batch
-                tip.batch_ids.sorted('id')[-1].active = True
+                tip.batch_id.active = True
                 resumed = tip._schedule_fp_followup()
             if resumed:
                 addendum += f', resuming forward-port stopped at {tip.display_name}'
@@ -411,18 +407,21 @@ class PullRequests(models.Model):
                 _logger.info('-> wrong state %s (%s)', pr.display_name, pr.state)
                 continue
 
-            # check if we've already forward-ported this branch:
-            # it has a batch without a staging
-            batch = self.env['runbot_merge.batch'].with_context(active_test=False).search([
-                ('staging_id', '=', False),
-                ('prs', 'in', pr.id),
-            ], limit=1)
-            # if the batch is inactive, the forward-port has been done *or*
-            # the PR's own forward port is in error, so bail
-            if not batch.active:
-                _logger.info('-> forward port done or in error (%s.active=%s)', batch, batch.active)
+            # check if we've already forward-ported this branch
+            source = pr.source_id or pr
+            next_target = source._find_next_target(pr)
+            if not next_target:
+                _logger.info("-> forward port done (no next target)")
                 continue
 
+            if n := self.search([
+                ('source_id', '=', source.id),
+                ('target', '=', next_target.id),
+            ], limit=1):
+                _logger.info('-> already forward-ported (%s)', n.display_name)
+                continue
+
+            batch = pr.batch_id
             # otherwise check if we already have a pending forward port
             _logger.info("%s %s %s", pr.display_name, batch, ', '.join(batch.mapped('prs.display_name')))
             if self.env['forwardport.batches'].search_count([('batch_id', '=', batch.id)]):
@@ -710,18 +709,9 @@ class PullRequests(models.Model):
                 'tags_add': labels,
             })
 
-        # batch the PRs so _validate can perform the followup FP properly
-        # (with the entire batch). If there are conflict then create a
-        # deactivated batch so the interface is coherent but we don't pickup
-        # an active batch we're never going to deactivate.
-        b = self.env['runbot_merge.batch'].create({
-            'target': target.id,
-            'prs': [(6, 0, new_batch.ids)],
-            'active': not has_conflicts,
-        })
         # try to schedule followup
         new_batch[0]._schedule_fp_followup()
-        return b
+        return new_batch.batch_id
 
     def _create_fp_branch(self, target_branch, fp_branch_name, cleanup):
         """ Creates a forward-port for the current PR to ``target_branch`` under

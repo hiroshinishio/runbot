@@ -191,19 +191,8 @@ def test_failed_staging(env, config, make_repo):
         prod.post_status('staging.c', 'failure', 'ci/runbot')
     env.run_crons()
 
-    pr3_head = env['runbot_merge.commit'].search([
-        ('sha', '=', pr3_id.head),
-    ])
-    assert len(pr3_head) == 1
-
-    assert not pr3_id.batch_id, "check that the PR indeed has no batch anymore"
-    assert not pr3_id.batch_ids.filtered(lambda b: b.active)
-
-    assert len(env['runbot_merge.batch'].search([
-        ('prs', 'in', pr3_id.id),
-        '|', ('active', '=', True),
-             ('active', '=', False),
-    ])) == 2, "check that there do exist batches"
+    pr3_head = env['runbot_merge.commit'].search([('sha', '=', pr3_id.head)])
+    assert pr3_head
 
     # send a new status to the PR, as if somebody had rebuilt it or something
     with prod:
@@ -213,6 +202,8 @@ def test_failed_staging(env, config, make_repo):
     assert pr3_head.to_check, "check that the commit was updated as to process"
     env.run_crons()
     assert not pr3_head.to_check, "check that the commit was processed"
+    assert pr3_id.state == 'ready'
+    assert pr3_id.staging_id
 
 class TestNotAllBranches:
     """ Check that forward-ports don't behave completely insanely when not all
@@ -787,6 +778,9 @@ def test_retarget_after_freeze(env, config, make_repo, users):
         prod.post_status('staging.bprime', 'success', 'ci/runbot')
         prod.post_status('staging.bprime', 'success', 'legal/cla')
     env.run_crons()
+
+    # #2 batch 6 (???)
+    assert port_id.state == 'merged'
 
     new_pr_id = env['runbot_merge.pull_requests'].search([('state', 'not in', ('merged', 'closed'))])
     assert len(new_pr_id) == 1

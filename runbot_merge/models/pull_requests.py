@@ -400,9 +400,14 @@ class PullRequests(models.Model):
     ], compute='_compute_statuses', store=True, column_type=enum(_name, 'status'))
     previous_failure = fields.Char(default='{}')
 
-    batch_id = fields.Many2one('runbot_merge.batch', string="Active Batch", compute='_compute_active_batch', store=True)
-    batch_ids = fields.Many2many('runbot_merge.batch', string="Batches", context={'active_test': False})
-    staging_id = fields.Many2one(related='batch_id.staging_id', store=True)
+    batch_id = fields.Many2one('runbot_merge.batch', index=True)
+    staging_id = fields.Many2one('runbot_merge.stagings', compute='_compute_staging', store=True)
+
+    @api.depends('batch_id.staging_ids.active')
+    def _compute_staging(self):
+        for p in self:
+            p.staging_id = p.batch_id.staging_ids.filtered('active')
+
     commits_map = fields.Char(help="JSON-encoded mapping of PR commits to actually integrated commits. The integration head (either a merge commit or the PR's topmost) is mapped from the 'empty' pr commit (the key is an empty string, because you can't put a null key in json maps).", default='{}')
 
     link_warned = fields.Boolean(
@@ -411,7 +416,7 @@ class PullRequests(models.Model):
     )
 
     blocked = fields.Char(
-        compute='_compute_is_blocked',
+        compute='_compute_is_blocked', store=True,
         help="PR is not currently stageable for some reason (mostly an issue if status is ready)"
     )
 
@@ -520,28 +525,23 @@ class PullRequests(models.Model):
 
     @property
     def _linked_prs(self):
-        if re.search(r':patch-\d+', self.label):
-            return self.browse(())
-        if self.state == 'merged':
-            return self.with_context(active_test=False).batch_ids\
-                   .filtered(lambda b: b.staging_id.state == 'success')\
-                   .prs - self
-        return self.search([
-            ('target', '=', self.target.id),
-            ('label', '=', self.label),
-            ('state', 'not in', ('merged', 'closed')),
-        ]) - self
+        return self.batch_id.prs - self
 
-    # missing link to other PRs
-    @api.depends('state')
+    @api.depends(
+        'batch_id.prs.draft',
+        'batch_id.prs.squash',
+        'batch_id.prs.merge_method',
+        'batch_id.prs.state',
+        'batch_id.prs.skipchecks',
+    )
     def _compute_is_blocked(self):
         self.blocked = False
         requirements = (
             lambda p: not p.draft,
             lambda p: p.squash or p.merge_method,
             lambda p: p.state == 'ready' \
-                  or any(pr.skipchecks for pr in (p | p._linked_prs)) \
-                 and all(pr.state != 'error' for pr in (p | p._linked_prs))
+                  or any(p.batch_id.prs.mapped('skipchecks')) \
+                 and all(pr.state != 'error' for pr in p.batch_id.prs)
         )
         messages = ('is in draft', 'has no merge method', 'is not ready')
         for pr in self:
@@ -550,7 +550,7 @@ class PullRequests(models.Model):
 
             blocking, message = next((
                 (blocking, message)
-                for blocking in (pr | pr._linked_prs)
+                for blocking in pr.batch_id.prs
                 for requirement, message in zip(requirements, messages)
                 if not requirement(blocking)
             ), (None, None))
@@ -712,7 +712,7 @@ class PullRequests(models.Model):
                     else:
                         msg = self._approve(author, login)
                 case commands.Reject() if is_author:
-                    batch = self | self._linked_prs
+                    batch = self.batch_id.prs
                     if cancellers := batch.filtered('cancel_staging'):
                         cancellers.cancel_staging = False
                     if (skippers := batch.filtered('skipchecks')) or self.reviewed_by:
@@ -1035,8 +1035,22 @@ class PullRequests(models.Model):
             return 'staged'
         return self.state
 
+    def _get_batch(self, *, target, label):
+        Batches = self.env['runbot_merge.batch']
+        if re.search(r':patch-\d+$', label):
+            batch = Batches
+        else:
+            batch = Batches.search([
+                ('active', '=', True),
+                ('target', '=', target),
+                ('prs.label', '=', label),
+            ])
+        return batch or Batches.create({'target': target})
+
     @api.model
     def create(self, vals):
+        vals['batch_id'] = self._get_batch(target=vals['target'], label=vals['label']).id
+
         pr = super().create(vals)
         c = self.env['runbot_merge.commit'].search([('sha', '=', pr.head)])
         pr._validate(c.statuses or '{}')
@@ -1108,8 +1122,17 @@ class PullRequests(models.Model):
                     ('prs', '=', True),
                 ])
             }))
-        if vals.get('closed'):
-            vals['reviewed_by'] = False
+        match vals.get('closed'):
+            case True if not self.closed:
+                vals['reviewed_by'] = False
+                vals['batch_id'] = False
+                if len(self.batch_id.prs) == 1:
+                    self.env.cr.precommit.add(self.batch_id.unlink)
+            case False if self.closed:
+                vals['batch_id'] = self._get_batch(
+                    target=vals.get('target') or self.target.id,
+                    label=vals.get('label') or self.label,
+                )
         w = super().write(vals)
 
         newhead = vals.get('head')
@@ -1231,16 +1254,13 @@ class PullRequests(models.Model):
         """ If the PR is staged, cancel the staging. If the PR is split and
         waiting, remove it from the split (possibly delete the split entirely)
         """
-        split_batches = self.with_context(active_test=False).mapped('batch_ids').filtered('split_id')
-        if len(split_batches) > 1:
-            _logger.warning("Found a PR linked with more than one split batch: %s (%s)", self, split_batches)
-        for b in split_batches:
-            if len(b.split_id.batch_ids) == 1:
-                # only the batch of this PR -> delete split
-                b.split_id.unlink()
-            else:
-                # else remove this batch from the split
-                b.split_id = False
+        split = self.batch_id.split_id
+        if len(split.batch_ids) == 1:
+            # only the batch of this PR -> delete split
+            split.unlink()
+        else:
+            # else remove this batch from the split
+            self.batch_id.split_id = False
 
         self.staging_id.cancel('%s ' + reason, self.display_name, *args)
 
@@ -1248,21 +1268,29 @@ class PullRequests(models.Model):
         # ignore if the PR is already being updated in a separate transaction
         # (most likely being merged?)
         self.env.cr.execute('''
-        SELECT id, state FROM runbot_merge_pull_requests
+        SELECT id, state, batch_id FROM runbot_merge_pull_requests
         WHERE id = %s AND state != 'merged'
         FOR UPDATE SKIP LOCKED;
         ''', [self.id])
-        if not self.env.cr.fetchone():
+        r = self.env.cr.fetchone()
+        if not r:
             return False
 
         self.env.cr.execute('''
         UPDATE runbot_merge_pull_requests
-        SET closed=True, state = 'closed', reviewed_by = null
+        SET closed=True, reviewed_by = null
         WHERE id = %s
         ''', [self.id])
         self.env.cr.commit()
-        self.modified(['closed', 'state', 'reviewed_by'])
+        self.modified(['closed', 'reviewed_by', 'batch_id'])
         self.unstage("closed by %s", by)
+
+        # PRs should leave their batch when *closed*, and batches must die when
+        # no PR is linked
+        old_batch = self.batch_id
+        self.batch_id = False
+        if not old_batch.prs:
+            old_batch.unlink()
         return True
 
 # state changes on reviews
@@ -1571,10 +1599,7 @@ class Stagings(models.Model):
 
     target = fields.Many2one('runbot_merge.branch', required=True, index=True)
 
-    batch_ids = fields.One2many(
-        'runbot_merge.batch', 'staging_id',
-        context={'active_test': False},
-    )
+    batch_ids = fields.Many2many('runbot_merge.batch', context={'active_test': False})
     pr_ids = fields.One2many('runbot_merge.pull_requests', compute='_compute_prs')
     state = fields.Selection([
         ('success', 'Success'),
@@ -1971,34 +1996,6 @@ class Split(models.Model):
 
     target = fields.Many2one('runbot_merge.branch', required=True)
     batch_ids = fields.One2many('runbot_merge.batch', 'split_id', context={'active_test': False})
-
-class Batch(models.Model):
-    """ A batch is a "horizontal" grouping of *codependent* PRs: PRs with
-    the same label & target but for different repositories. These are
-    assumed to be part of the same "change" smeared over multiple
-    repositories e.g. change an API in repo1, this breaks use of that API
-    in repo2 which now needs to be updated.
-    """
-    _name = _description = 'runbot_merge.batch'
-
-    target = fields.Many2one('runbot_merge.branch', required=True, index=True)
-    staging_id = fields.Many2one('runbot_merge.stagings', index=True)
-    split_id = fields.Many2one('runbot_merge.split', index=True)
-
-    prs = fields.Many2many('runbot_merge.pull_requests')
-
-    active = fields.Boolean(default=True)
-
-    @api.constrains('target', 'prs')
-    def _check_prs(self):
-        for batch in self:
-            repos = self.env['runbot_merge.repository']
-            for pr in batch.prs:
-                if pr.target != batch.target:
-                    raise ValidationError("A batch and its PRs must have the same branch, got %s and %s" % (batch.target, pr.target))
-                if pr.repository in repos:
-                    raise ValidationError("All prs of a batch must have different target repositories, got a duplicate %s on %s" % (pr.repository, pr))
-                repos |= pr.repository
 
 
 class FetchJob(models.Model):

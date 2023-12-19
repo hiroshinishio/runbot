@@ -838,8 +838,6 @@ class TestBlocked:
         p = to_pr(env, pr)
         assert p.blocked
         with repo_b: b.close()
-        # FIXME: find a way for PR.blocked to depend on linked PR somehow so this isn't needed
-        p.invalidate_cache(['blocked'], [p.id])
         assert not p.blocked
 
     def test_linked_merged(self, env, repo_a, repo_b, config):

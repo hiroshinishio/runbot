@@ -84,32 +84,32 @@ class ForwardPortTasks(models.Model, Queue):
         sentry_sdk.set_tag('forward-porting', batch.prs.mapped('display_name'))
         newbatch = batch.prs._port_forward()
 
-        if newbatch:
-            _logger.info(
-                "Processing %s (from %s): %s (%s) -> %s (%s)",
-                self.id, self.source,
-                batch, batch.prs,
-                newbatch, newbatch.prs,
-            )
-            # insert new batch in ancestry sequence unless conflict (= no parent)
-            if self.source == 'insert':
-                for pr in newbatch.prs:
-                    if not pr.parent_id:
-                        break
-                    newchild = pr.search([
-                        ('parent_id', '=', pr.parent_id.id),
-                        ('id', '!=', pr.id),
-                    ])
-                    if newchild:
-                        newchild.parent_id = pr.id
-        else: # reached end of seq (or batch is empty)
+        if not newbatch:  # reached end of seq (or batch is empty)
             # FIXME: or configuration is fucky so doesn't want to FP (maybe should error and retry?)
             _logger.info(
-                "Processing %s (from %s): %s (%s) -> end of the sequence",
+                "Processed %s (from %s): %s (%s) -> end of the sequence",
                 self.id, self.source,
                 batch, batch.prs
             )
-        batch.active = False
+            return
+
+        _logger.info(
+            "Processed %s (from %s): %s (%s) -> %s (%s)",
+            self.id, self.source,
+            batch, batch.prs,
+            newbatch, newbatch.prs,
+        )
+        # insert new batch in ancestry sequence unless conflict (= no parent)
+        if self.source == 'insert':
+            for pr in newbatch.prs:
+                if not pr.parent_id:
+                    break
+                newchild = pr.search([
+                    ('parent_id', '=', pr.parent_id.id),
+                    ('id', '!=', pr.id),
+                ])
+                if newchild:
+                    newchild.parent_id = pr.id
 
 
 class UpdateQueue(models.Model, Queue):

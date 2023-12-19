@@ -367,6 +367,7 @@ def setci(*, source, repo, target, status='success'):
     in  ``repo``.
     """
     pr = source.search([('source_id', '=', source.id), ('target.name', '=', str(target))])
+    assert pr, f"could not find forward port of {source.display_name} to {target}"
     with repo:
         repo.post_status(pr.head, status)
 

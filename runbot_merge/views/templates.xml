@@ -331,7 +331,7 @@
     <template id="view_pull_request_info_error">
         <div class="alert alert-danger">
             Error:
-            <span t-esc="pr.with_context(active_test=False).batch_ids[-1:].staging_id.reason">
+            <span t-esc="pr.with_context(active_test=False).batch_id.staging_ids[-1:].reason">
                 Unable to stage PR
             </span>
         </div>
