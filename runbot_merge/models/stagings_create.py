@@ -223,21 +223,16 @@ def ready_prs(for_branch: Branch) -> List[Tuple[int, PullRequests]]:
       max(pr.priority) as priority,
       array_agg(pr.id) AS match
     FROM runbot_merge_pull_requests pr
+    JOIN runbot_merge_batch b ON (b.id = pr.batch_id)
     WHERE pr.target = any(%s)
       -- exclude terminal states (so there's no issue when
       -- deleting branches & reusing labels)
       AND pr.state != 'merged'
       AND pr.state != 'closed'
-    GROUP BY
-        pr.target,
-        CASE
-            WHEN pr.label SIMILAR TO '%%:patch-[[:digit:]]+'
-                THEN pr.id::text
-            ELSE pr.label
-        END
+    GROUP BY b.id
     HAVING
         bool_and(pr.state = 'ready')
-     OR (bool_or(pr.skipchecks) AND bool_and(pr.state != 'error'))
+     OR (bool_or(b.skipchecks) AND bool_and(pr.state != 'error'))
     ORDER BY max(pr.priority) DESC, min(pr.id)
     """, [for_branch.ids])
     browse = env['runbot_merge.pull_requests'].browse

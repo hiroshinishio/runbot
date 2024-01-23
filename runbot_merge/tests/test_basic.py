@@ -2875,7 +2875,7 @@ class TestBatching(object):
         assert p_01.skipchecks == False
         assert p_01.cancel_staging == False
 
-        p_01.cancel_staging = True
+        p_01.batch_id.cancel_staging = True
         # FIXME: cancel_staging should only cancel when the PR is or
         #        transitions to ready
         # assert staging_4.active

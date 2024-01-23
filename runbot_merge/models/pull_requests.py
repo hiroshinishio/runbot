@@ -327,16 +327,8 @@ class PullRequests(models.Model):
 
     closed = fields.Boolean(default=False, tracking=True)
     error = fields.Boolean(string="in error", default=False, tracking=True)
-    skipchecks = fields.Boolean(
-        string="Skips Checks",
-        default=False, tracking=True,
-        help="Forces entire batch to be ready, skips validation and approval",
-    )
-    cancel_staging = fields.Boolean(
-        string="Cancels Stagings",
-        default=False, tracking=True,
-        help="Cancels current staging on target branch when becoming ready"
-    )
+    skipchecks = fields.Boolean(related='batch_id.skipchecks')
+    cancel_staging = fields.Boolean(related='batch_id.cancel_staging')
     merge_date = fields.Datetime(tracking=True)
 
     state = fields.Selection([
@@ -532,7 +524,7 @@ class PullRequests(models.Model):
         'batch_id.prs.squash',
         'batch_id.prs.merge_method',
         'batch_id.prs.state',
-        'batch_id.prs.skipchecks',
+        'batch_id.skipchecks',
     )
     def _compute_is_blocked(self):
         self.blocked = False
@@ -540,7 +532,7 @@ class PullRequests(models.Model):
             lambda p: not p.draft,
             lambda p: p.squash or p.merge_method,
             lambda p: p.state == 'ready' \
-                  or any(p.batch_id.prs.mapped('skipchecks')) \
+                  or p.batch_id.skipchecks \
                  and all(pr.state != 'error' for pr in p.batch_id.prs)
         )
         messages = ('is in draft', 'has no merge method', 'is not ready')
@@ -712,20 +704,19 @@ class PullRequests(models.Model):
                     else:
                         msg = self._approve(author, login)
                 case commands.Reject() if is_author:
-                    batch = self.batch_id.prs
-                    if cancellers := batch.filtered('cancel_staging'):
-                        cancellers.cancel_staging = False
-                    if (skippers := batch.filtered('skipchecks')) or self.reviewed_by:
+                    if cancellers := self.batch_id.cancel_staging:
+                        self.batch_id.cancel_staging = False
+                    if self.batch_id.skipchecks or self.reviewed_by:
                         if self.error:
                             self.error = False
                         if self.reviewed_by:
                             self.reviewed_by = False
-                        if skippers:
-                            skippers.skipchecks = False
+                        if self.batch_id.skipchecks:
+                            self.batch_id.skipchecks = False
                             self.env.ref("runbot_merge.command.unapprove.p0")._send(
                                 repository=self.repository,
                                 pull_request=self.number,
-                                format_args={'user': login, 'pr': skippers[:1]},
+                                format_args={'user': login, 'pr': self.batch_id.prs[:1]},
                             )
                         self.unstage("unreviewed (r-) by %s", login)
                     else:
@@ -762,13 +753,13 @@ class PullRequests(models.Model):
                 case commands.Priority() if is_admin:
                     self.priority = str(command)
                 case commands.SkipChecks() if is_admin:
-                    self.skipchecks = True
+                    self.batch_id.skipchecks = True
                     self.reviewed_by = author
                     for p in self.batch_id.prs - self:
                         if not p.reviewed_by:
                             p.reviewed_by = author
                 case commands.CancelStaging() if is_admin:
-                    self.cancel_staging = True
+                    self.batch_id.cancel_staging = True
                     # FIXME: remove this when skipchecks properly affects state,
                     #        maybe: staging cancellation should then only occur
                     #        when a cancel_staging PR transitions to ready, or
