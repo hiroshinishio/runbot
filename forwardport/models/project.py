@@ -258,11 +258,6 @@ class PullRequests(models.Model):
                         token_field='fp_github_token',
                         format_args={'pr': parent, 'child': p},
                     )
-        if vals.get('merge_date'):
-            self.env['forwardport.branch_remover'].create([
-                {'pr_id': p.id}
-                for p in self
-            ])
         # if we change the policy to skip CI, schedule followups on existing FPs
         if vals.get('fw_policy') == 'skipci' and self.state == 'merged':
             self.env['runbot_merge.pull_requests'].search([
@@ -344,8 +339,6 @@ class PullRequests(models.Model):
                 })
                 resumed = tip
             else:
-                # reactivate batch
-                tip.batch_id.active = True
                 resumed = tip._schedule_fp_followup()
             if resumed:
                 addendum += f', resuming forward-port stopped at {tip.display_name}'
@@ -982,6 +975,21 @@ stderr:
                 }
             )
 
+class Batch(models.Model):
+    _inherit = 'runbot_merge.batch'
+
+    def write(self, vals):
+        if vals.get('merge_date'):
+            self.env['forwardport.branch_remover'].create([
+                {'pr_id': p.id}
+                for b in self
+                if not b.merge_date
+                for p in b.prs
+            ])
+
+        super().write(vals)
+
+        return True
 
 # ordering is a bit unintuitive because the lowest sequence (and name)
 # is the last link of the fp chain, reasoning is a bit more natural the

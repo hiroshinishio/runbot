@@ -20,8 +20,7 @@ class Batch(models.Model):
 
     prs = fields.One2many('runbot_merge.pull_requests', 'batch_id')
 
-    active = fields.Boolean(default=True)
-
+    merge_date = fields.Datetime(tracking=True)
     skipchecks = fields.Boolean(
         string="Skips Checks",
         default=False, tracking=True,

@@ -15,8 +15,7 @@ from typing import Optional, Union, List, Iterator, Tuple
 import sentry_sdk
 import werkzeug
 
-from odoo import api, fields, models, tools
-from odoo.exceptions import ValidationError
+from odoo import api, fields, models, tools, Command
 from odoo.osv import expression
 from odoo.tools import html_escape
 from . import commands
@@ -329,7 +328,12 @@ class PullRequests(models.Model):
     error = fields.Boolean(string="in error", default=False, tracking=True)
     skipchecks = fields.Boolean(related='batch_id.skipchecks')
     cancel_staging = fields.Boolean(related='batch_id.cancel_staging')
-    merge_date = fields.Datetime(tracking=True)
+    merge_date = fields.Datetime(
+        related='batch_id.merge_date',
+        inverse=lambda _: 1/0,
+        tracking=True,
+        store=True,
+    )
 
     state = fields.Selection([
         ('opened', 'Opened'),
@@ -939,10 +943,10 @@ class PullRequests(models.Model):
             pr.status = st
 
     # closed, merged, error should be exclusive, so this should probably be a selection
-    @api.depends("status", "reviewed_by", 'merge_date', "closed", "error")
+    @api.depends("status", "reviewed_by", 'batch_id.merge_date', "closed", "error")
     def _compute_state(self):
         for pr in self:
-            if pr.merge_date:
+            if pr.batch_id.merge_date:
                 pr.state = 'merged'
             elif pr.closed:
                 pr.state = "closed"
@@ -1032,7 +1036,7 @@ class PullRequests(models.Model):
             batch = Batches
         else:
             batch = Batches.search([
-                ('active', '=', True),
+                ('merge_date', '=', False),
                 ('target', '=', target),
                 ('prs.label', '=', label),
             ])
@@ -1735,7 +1739,6 @@ class Stagings(models.Model):
             return False
 
         _logger.info("Cancelling staging %s: " + reason, self, *args)
-        self.mapped('batch_ids').write({'active': False})
         self.write({
             'active': False,
             'state': 'cancelled',
@@ -1756,7 +1759,6 @@ class Stagings(models.Model):
                format_args={'pr': pr, 'message': message},
            )
 
-        self.batch_ids.write({'active': False})
         self.write({
             'active': False,
             'state': 'failure',
@@ -1772,15 +1774,14 @@ class Stagings(models.Model):
             # NB: batches remain attached to their original staging
             sh = self.env['runbot_merge.split'].create({
                 'target': self.target.id,
-                'batch_ids': [(4, batch.id, 0) for batch in h],
+                'batch_ids': [Command.link(batch.id) for batch in h],
             })
             st = self.env['runbot_merge.split'].create({
                 'target': self.target.id,
-                'batch_ids': [(4, batch.id, 0) for batch in t],
+                'batch_ids': [Command.link(batch.id) for batch in t],
             })
             _logger.info("Split %s to %s (%s) and %s (%s)",
                          self, h, sh, t, st)
-            self.batch_ids.write({'active': False})
             self.write({
                 'active': False,
                 'state': 'failure',
@@ -1871,7 +1872,7 @@ class Stagings(models.Model):
                     "%s FF successful, marking %s as merged",
                     self, prs
                 )
-                prs.merge_date = fields.Datetime.now()
+                self.batch_ids.merge_date = fields.Datetime.now()
 
                 pseudobranch = None
                 if self.target == project.branch_ids[:1]:
@@ -1893,7 +1894,6 @@ class Stagings(models.Model):
                             'tags_add': json.dumps([pseudobranch]),
                         })
             finally:
-                self.batch_ids.write({'active': False})
                 self.write({'active': False})
         elif self.state == 'failure' or self.is_timed_out():
             self.try_splitting()
