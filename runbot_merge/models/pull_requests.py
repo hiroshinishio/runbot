@@ -1094,15 +1094,12 @@ class PullRequests(models.Model):
         if canceler:
             fields.append('state')
             fields.append('skipchecks')
-        if 'target' in vals:
-            fields.append('target')
-        if 'message' in vals:
-            fields.append('message')
         prev = {pr.id: {field: pr[field] for field in fields} for pr in self}
 
+        # when explicitly marking a PR as ready
         if vals.get('state') == 'ready':
             # skip checks anyway
-            vals['skipchecks'] = True
+            self.batch_id.skipchecks = True
             # if the state is forced to ready, set current user as reviewer
             # and override all statuses
             vals.setdefault('reviewed_by', self.env.user.partner_id.id)
@@ -1117,6 +1114,20 @@ class PullRequests(models.Model):
                     ('prs', '=', True),
                 ])
             }))
+
+        for pr in self:
+            if (t := vals.get('target')) is not None and pr.target.id != t:
+                pr.unstage(
+                    "target (base) branch was changed from %r to %r",
+                    pr.target.display_name,
+                    self.env['runbot_merge.branch'].browse(t).display_name,
+                )
+
+            if 'message' in vals:
+                merge_method = vals['merge_method'] if 'merge_method' in vals else pr.merge_method
+                if merge_method not in (False, 'rebase-ff') and pr.message != vals['message']:
+                    pr.unstage("merge message updated")
+
         match vals.get('closed'):
             case True if not self.closed:
                 vals['reviewed_by'] = False
@@ -1128,6 +1139,13 @@ class PullRequests(models.Model):
                     target=vals.get('target') or self.target.id,
                     label=vals.get('label') or self.label,
                 )
+            case None if (new_target := vals.get('target')) and new_target != self.target.id:
+                vals['batch_id'] = self._get_batch(
+                    target=new_target,
+                    label=vals.get('label') or self.label,
+                )
+                if len(self.batch_id.prs) == 1:
+                    self.env.cr.precommit.add(self.batch_id.unlink)
         w = super().write(vals)
 
         newhead = vals.get('head')
@@ -1135,29 +1153,20 @@ class PullRequests(models.Model):
             c = self.env['runbot_merge.commit'].search([('sha', '=', newhead)])
             self._validate(c.statuses or '{}')
 
-        for pr in self:
-            old = prev[pr.id]
-            if canceler:
+        if canceler:
+            for pr in self:
+                if not pr.cancel_staging:
+                    continue
+
+                old = prev[pr.id]
                 def ready(pr):
                     return pr['state'] == 'ready'\
                        or (pr['skipchecks'] and pr['state'] != 'error')
-                if pr.cancel_staging and not ready(old) and ready(pr):
-                    if old['state'] == 'error': # error -> ready gets a bespok message
+                if ready(pr) and not ready(old):
+                    if old['state'] == 'error': # error -> ready gets a bespoke message
                         pr.target.active_staging_id.cancel(f"retrying {pr.display_name}")
                     else:
                         pr.target.active_staging_id.cancel(f"{pr.display_name} became ready")
-
-            if 'target' in vals:
-                old_target = old['target']
-                if pr.target != old_target:
-                    pr.unstage(
-                        "target (base) branch was changed from %r to %r",
-                        old_target.display_name, pr.target.display_name,
-                    )
-
-            if 'message' in vals:
-                if pr.merge_method not in (False, 'rebase-ff') and pr.message != old['message']:
-                    pr.unstage("merge message updated")
         return w
 
     def _check_linked_prs_statuses(self, commit=False):

@@ -773,6 +773,7 @@ class TestPREdition:
         with repo: prx.base = '1.0'
         assert pr.target == branch_1
         assert not pr.staging_id, "updated the base of a staged PR should have unstaged it"
+        assert st.state == 'cancelled', f"expected cancellation, got {st.state}"
         assert st.reason == f"{pr.display_name} target (base) branch was changed from 'master' to '1.0'"
 
         with repo: prx.base = '2.0'

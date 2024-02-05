@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from odoo import models, fields
+from odoo import models, fields, api
 
 
 class Batch(models.Model):
@@ -36,3 +36,29 @@ class Batch(models.Model):
         default=False, tracking=True,
         help="Cancels current staging on target branch when becoming ready"
     )
+
+    blocked = fields.Char(store=True, compute="_compute_stageable")
+
+    @api.depends(
+        "merge_date",
+        "prs.error", "prs.draft", "prs.squash", "prs.merge_method",
+        "skipchecks", "prs.status", "prs.reviewed_by",
+    )
+    def _compute_stageable(self):
+        for batch in self:
+            if batch.merge_date:
+                batch.blocked = "Merged."
+            elif blocking := batch.prs.filtered(
+                lambda p: p.error or p.draft or not (p.squash or p.merge_method)
+            ):
+                batch.blocked = "Pull request(s) %s blocked." % (
+                    p.display_name for p in blocking
+                )
+            elif not batch.skipchecks and (unready := batch.prs.filtered(
+                lambda p: not (p.reviewed_by and p.status == "success")
+            )):
+                batch.blocked = "Pull request(s) %s waiting for CI." % ', '.join(
+                    p.display_name for p in unready
+                )
+            else:
+                batch.blocked = False

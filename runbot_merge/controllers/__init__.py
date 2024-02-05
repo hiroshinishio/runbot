@@ -176,7 +176,7 @@ def handle_pr(env, event):
         return env['runbot_merge.pull_requests'].search([
             ('repository', '=', repo.id),
             ('number', '=', pr['number']),
-            ('target', '=', target.id),
+            # ('target', '=', target.id),
         ])
     # edition difficulty: pr['base']['ref] is the *new* target, the old one
     # is at event['change']['base']['ref'] (if the target changed), so edition

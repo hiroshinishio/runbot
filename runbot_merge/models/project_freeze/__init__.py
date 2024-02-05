@@ -218,7 +218,8 @@ class FreezeWizard(models.Model):
         }
         for repo, copy in repos.items():
             copy.fetch(git.source_url(repo, 'github'), '+refs/heads/*:refs/heads/*')
-        for pr in self.release_pr_ids.pr_id | self.bump_pr_ids.pr_id:
+        all_prs = self.release_pr_ids.pr_id | self.bump_pr_ids.pr_id
+        for pr in all_prs:
             repos[pr.repository].fetch(
                 git.source_url(pr.repository, 'github'),
                 pr.head,
@@ -338,7 +339,15 @@ class FreezeWizard(models.Model):
                 f"Unable to {reason} branch {repo}:{branch}.{addendum}"
             )
 
-        all_prs = self.release_pr_ids.pr_id | self.bump_pr_ids.pr_id
+        b = self.env['runbot_merge.branch'].search([('name', '=', self.branch_name)])
+        self.env.cr.execute(
+            "UPDATE runbot_merge_batch SET target=%s WHERE id = %s;"
+            "UPDATE runbot_merge_pull_requests SET target=%s WHERE id = any(%s)",
+            [
+                b.id, self.release_pr_ids.pr_id.batch_id.id,
+                b.id, self.release_pr_ids.pr_id.ids,
+            ]
+        )
         all_prs.batch_id.merge_date = fields.Datetime.now()
         all_prs.reviewed_by = self.env.user.partner_id.id
         self.env['runbot_merge.pull_requests.feedback'].create([{
