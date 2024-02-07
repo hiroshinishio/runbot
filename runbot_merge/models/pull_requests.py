@@ -10,7 +10,7 @@ import logging
 import re
 import time
 from functools import reduce
-from typing import Optional, Union, List, Iterator, Tuple
+from typing import Optional, Union, List, Iterator
 
 import sentry_sdk
 import werkzeug
@@ -19,6 +19,7 @@ from odoo import api, fields, models, tools, Command
 from odoo.osv import expression
 from odoo.tools import html_escape
 from . import commands
+from .utils import enum
 
 from .. import github, exceptions, controllers, utils
 
@@ -307,9 +308,6 @@ class Branch(models.Model):
 
 
 ACL = collections.namedtuple('ACL', 'is_admin is_reviewer is_author')
-def enum(model: str, field: str) -> Tuple[str, str]:
-    n = f'{model.replace(".", "_")}_{field}_type'
-    return n, n
 class PullRequests(models.Model):
     _name = 'runbot_merge.pull_requests'
     _description = "Pull Request"
@@ -374,13 +372,7 @@ class PullRequests(models.Model):
 
     reviewed_by = fields.Many2one('res.partner', index=True, tracking=True)
     delegates = fields.Many2many('res.partner', help="Delegate reviewers, not intrinsically reviewers but can review this PR")
-    priority = fields.Selection([
-        ('default', "Default"),
-        ('priority', "Priority"),
-        ('alone', "Alone"),
-    ], default='default', index=True, group_operator=None, required=True,
-        column_type=enum(_name, 'priority'),
-    )
+    priority = fields.Selection(related="batch_id.priority", inverse=lambda _: 1 / 0)
 
     overrides = fields.Char(required=True, default='{}', tracking=True)
     statuses = fields.Text(help="Copy of the statuses from the HEAD commit, as a Python literal", default="{}")
@@ -755,7 +747,7 @@ class PullRequests(models.Model):
                             })
                     delegates.write({'delegate_reviewer': [(4, self.id, 0)]})
                 case commands.Priority() if is_admin:
-                    self.priority = str(command)
+                    self.batch_id.priority = str(command)
                 case commands.SkipChecks() if is_admin:
                     self.batch_id.skipchecks = True
                     self.reviewed_by = author
@@ -1014,7 +1006,7 @@ class PullRequests(models.Model):
                     [tuple(s for s, _ in field.selection)]
                 )
 
-        super(PullRequests, self)._auto_init()
+        super()._auto_init()
         # incorrect index: unique(number, target, repository).
         tools.drop_index(self._cr, 'runbot_merge_unique_pr_per_target', self._table)
         # correct index:

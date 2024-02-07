@@ -61,11 +61,9 @@ def try_staging(branch: Branch) -> Optional[Stagings]:
     def log(label: str, batches: Batch) -> None:
         _logger.info(label, ', '.join(batches.mapped('prs.display_name')))
 
-    rows = ready_prs(for_branch=branch)
-    priority = rows[0][0] if rows else None
-    concat = branch.env['runbot_merge.batch'].concat
-    if priority == 'alone':
-        batches: Batch = concat(*(batch for _, batch in takewhile(lambda r: r[0] == priority, rows)))
+    alone, batches = ready_prs(for_branch=branch)
+    print('alone', alone, 'ready', batches)
+    if alone:
         log("staging high-priority PRs %s", batches)
     elif branch.project_id.staging_priority == 'default':
         if split := branch.split_ids[:1]:
@@ -75,7 +73,6 @@ def try_staging(branch: Branch) -> Optional[Stagings]:
         else:
             # priority, normal; priority = sorted ahead of normal, so always picked
             # first as long as there's room
-            batches = concat(*(batch for _, batch in rows))
             log("staging ready PRs %s (prioritising splits)", batches)
     elif branch.project_id.staging_priority == 'ready':
         # splits are ready by definition, we need to exclude them from the
@@ -83,7 +80,7 @@ def try_staging(branch: Branch) -> Optional[Stagings]:
         # we cycle forever
         # FIXME: once the batches are less shit, store this durably on the
         #        batches and filter out when fetching readies (?)
-        batches = concat(*(batch for _, batch in rows)) - branch.split_ids.batch_ids
+        batches -= branch.split_ids.batch_ids
 
         if batches:
             log("staging ready PRs %s (prioritising ready)", batches)
@@ -97,7 +94,7 @@ def try_staging(branch: Branch) -> Optional[Stagings]:
         # splits are ready by definition, we need to exclude them from the
         # ready rows otherwise ready always wins but we re-stage the splits, so
         # if an error is legit we'll cycle forever
-        batches = concat(*(batch for _, batch in rows)) - branch.split_ids.batch_ids
+        batches -= branch.split_ids.batch_ids
 
         maxsplit = max(branch.split_ids, key=lambda s: len(s.batch_ids), default=branch.env['runbot_merge.split'])
         _logger.info("largest split = %d, ready = %d", len(maxsplit.batch_ids), len(batches))
@@ -204,20 +201,23 @@ For-Commit-Id: {it.head}
     return st
 
 
-def ready_prs(for_branch: Branch) -> List[Tuple[int, Batch]]:
+def ready_prs(for_branch: Branch) -> Tuple[bool, Batch]:
     env = for_branch.env
     env.cr.execute("""
-    SELECT
-      max(pr.priority) as priority,
-      b.id as batch
-    FROM runbot_merge_batch b
-    JOIN runbot_merge_pull_requests pr ON (b.id = pr.batch_id)
-    WHERE b.target = %s AND b.blocked IS NULL
-    GROUP BY b.id
-    ORDER BY max(pr.priority) DESC, min(b.id)
+        SELECT max(priority)
+        FROM runbot_merge_batch
+        WHERE blocked IS NULL AND target = %s
     """, [for_branch.id])
-    browse = env['runbot_merge.batch'].browse
-    return [(p, browse(id)) for p, id in env.cr.fetchall()]
+    alone = env.cr.fetchone()[0] == 'alone'
+
+    return (
+        alone,
+        env['runbot_merge.batch'].search([
+            ('target', '=', for_branch.id),
+            ('blocked', '=', False),
+            ('priority', '=', 'alone') if alone else (1, '=', 1),
+        ], order="priority DESC, id ASC"),
+    )
 
 
 def staging_setup(

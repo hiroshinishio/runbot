@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from odoo import models, fields, api
+from odoo.tools import create_index
+from .utils import enum
 
 
 class Batch(models.Model):
@@ -36,8 +38,37 @@ class Batch(models.Model):
         default=False, tracking=True,
         help="Cancels current staging on target branch when becoming ready"
     )
+    priority = fields.Selection([
+        ('default', "Default"),
+        ('priority', "Priority"),
+        ('alone', "Alone"),
+    ], default='default', index=True, group_operator=None, required=True,
+        column_type=enum(_name, 'priority'),
+    )
 
     blocked = fields.Char(store=True, compute="_compute_stageable")
+
+    def _auto_init(self):
+        for field in self._fields.values():
+            if not isinstance(field, fields.Selection) or field.column_type[0] == 'varchar':
+                continue
+
+            t = field.column_type[1]
+            self.env.cr.execute("SELECT FROM pg_type WHERE typname = %s", [t])
+            if not self.env.cr.rowcount:
+                self.env.cr.execute(
+                    f"CREATE TYPE {t} AS ENUM %s",
+                    [tuple(s for s, _ in field.selection)]
+                )
+
+        super()._auto_init()
+
+        create_index(
+            self.env.cr,
+            "runbot_merge_batch_unblocked_idx",
+            "runbot_merge_batch",
+            ["(blocked is null), priority"],
+        )
 
     @api.depends(
         "merge_date",

@@ -2820,11 +2820,17 @@ class TestBatching(object):
         assert not staging_1.active
         assert not p_11.staging_id and not p_12.staging_id
         assert p_01.staging_id
+        assert p_11.state == 'ready'
+        assert p_12.state == 'ready'
 
         # make the staging fail
         with repo:
             repo.post_status('staging.master', 'failure', 'ci/runbot')
         env.run_crons()
+        assert p_01.error
+        assert p_01.batch_id.blocked
+        assert p_01.blocked
+
         assert p_01.state == 'error'
         assert not p_01.staging_id.active
         staging_2 = ensure_one(sm_all.staging_id)
