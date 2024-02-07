@@ -184,7 +184,7 @@ class FreezeWizard(models.Model):
         # we don't want to run concurrently to the crons above, though we
         # don't need to prevent read access to them
         self.env.cr.execute(
-            'SELECT * FROM ir_cron WHERE id =ANY(%s) FOR SHARE NOWAIT',
+            'SELECT FROM ir_cron WHERE id =ANY(%s) FOR SHARE NOWAIT',
             [conflict_crons.ids]
         )
 
@@ -195,7 +195,7 @@ class FreezeWizard(models.Model):
         master, rest = project_id.branch_ids[0], project_id.branch_ids[1:]
         if self.bump_pr_ids and master.active_staging_id:
             self.env.cr.execute(
-                'SELECT * FROM runbot_merge_stagings WHERE id = %s FOR UPDATE NOWAIT',
+                'SELECT FROM runbot_merge_stagings WHERE id = %s FOR UPDATE NOWAIT',
                 [master.active_staging_id.id]
             )
 
