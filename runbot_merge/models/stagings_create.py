@@ -61,8 +61,8 @@ def try_staging(branch: Branch) -> Optional[Stagings]:
     def log(label: str, batches: Batch) -> None:
         _logger.info(label, ', '.join(batches.mapped('prs.display_name')))
 
-    alone, batches = ready_prs(for_branch=branch)
-    print('alone', alone, 'ready', batches)
+    alone, batches = ready_batches(for_branch=branch)
+
     if alone:
         log("staging high-priority PRs %s", batches)
     elif branch.project_id.staging_priority == 'default':
@@ -75,13 +75,6 @@ def try_staging(branch: Branch) -> Optional[Stagings]:
             # first as long as there's room
             log("staging ready PRs %s (prioritising splits)", batches)
     elif branch.project_id.staging_priority == 'ready':
-        # splits are ready by definition, we need to exclude them from the
-        # ready rows otherwise we'll re-stage the splits so if an error is legit
-        # we cycle forever
-        # FIXME: once the batches are less shit, store this durably on the
-        #        batches and filter out when fetching readies (?)
-        batches -= branch.split_ids.batch_ids
-
         if batches:
             log("staging ready PRs %s (prioritising ready)", batches)
         else:
@@ -91,11 +84,6 @@ def try_staging(branch: Branch) -> Optional[Stagings]:
             log("staging split PRs %s (prioritising ready)", batches)
     else:
         assert branch.project_id.staging_priority == 'largest'
-        # splits are ready by definition, we need to exclude them from the
-        # ready rows otherwise ready always wins but we re-stage the splits, so
-        # if an error is legit we'll cycle forever
-        batches -= branch.split_ids.batch_ids
-
         maxsplit = max(branch.split_ids, key=lambda s: len(s.batch_ids), default=branch.env['runbot_merge.split'])
         _logger.info("largest split = %d, ready = %d", len(maxsplit.batch_ids), len(batches))
         # bias towards splits if len(ready) = len(batch_ids)
@@ -201,13 +189,17 @@ For-Commit-Id: {it.head}
     return st
 
 
-def ready_prs(for_branch: Branch) -> Tuple[bool, Batch]:
+def ready_batches(for_branch: Branch) -> Tuple[bool, Batch]:
     env = for_branch.env
+    # splits are ready by definition, we need to exclude them from the ready
+    # rows otherwise if a prioritised (alone) PR is part of a split it'll be
+    # staged through priority *and* through split.
+    split_ids = for_branch.split_ids.batch_ids.ids
     env.cr.execute("""
         SELECT max(priority)
         FROM runbot_merge_batch
-        WHERE blocked IS NULL AND target = %s
-    """, [for_branch.id])
+        WHERE blocked IS NULL AND target = %s AND NOT id = any(%s)
+    """, [for_branch.id, split_ids])
     alone = env.cr.fetchone()[0] == 'alone'
 
     return (
@@ -216,6 +208,7 @@ def ready_prs(for_branch: Branch) -> Tuple[bool, Batch]:
             ('target', '=', for_branch.id),
             ('blocked', '=', False),
             ('priority', '=', 'alone') if alone else (1, '=', 1),
+            ('id', 'not in', split_ids),
         ], order="priority DESC, id ASC"),
     )
 

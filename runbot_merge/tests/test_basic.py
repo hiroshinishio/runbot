@@ -2969,6 +2969,50 @@ class TestBatching(object):
         assert not p_01.staging_id, "p_01 should not be picked up as it's failed"
         assert p_21.staging_id, "p_21 should have been staged"
 
+    def test_urgent_split(self, env, repo, config):
+        """Ensure that urgent (alone) PRs which get split don't get
+        double-merged
+        """
+        with repo:
+            repo.make_commits(
+                None,
+                Commit("initial", tree={'a': '1'}),
+                ref="heads/master"
+            )
+
+            pr01 = self._pr(
+                repo, "PR1", [{'b': '1'}],
+                user=config['role_user']['token'],
+                reviewer=None,
+            )
+            pr01.post_comment('hansen alone r+', config['role_reviewer']['token'])
+            pr02 = self._pr(
+                repo, "PR2", [{'c': '1'}],
+                user=config['role_user']['token'],
+                reviewer=None,
+            )
+            pr02.post_comment('hansen alone r+', config['role_reviewer']['token'])
+        env.run_crons('runbot_merge.process_updated_commits')
+        pr01_id = to_pr(env, pr01)
+        assert pr01_id.blocked is False
+        pr02_id = to_pr(env, pr02)
+        assert pr01_id.blocked is False
+
+        env.run_crons()
+        st = pr01_id.staging_id
+        assert st and pr02_id.staging_id == st
+        with repo:
+            repo.post_status('staging.master', 'failure', 'ci/runbot')
+        env.run_crons()
+        # should have cancelled the staging, split it, and re-staged the first
+        # half of the split
+        assert st.state == 'failure'
+        assert pr01_id.staging_id and pr01_id.staging_id != st
+        assert not pr02_id.staging_id
+        split_prs = env['runbot_merge.split'].search([]).batch_ids.prs
+        assert split_prs == pr02_id, \
+            f"only the unstaged PR {pr02_id} should be in a split, found {split_prs}"
+
     @pytest.mark.skip(reason="Maybe nothing to do, the PR is just skipped and put in error?")
     def test_batching_merge_failure(self):
         pass
