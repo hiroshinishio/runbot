@@ -9,6 +9,7 @@ import functools
 import operator
 import time
 import xmlrpc.client
+from itertools import repeat
 
 import pytest
 import requests
@@ -1468,3 +1469,65 @@ def test_freeze_conflict(env, project, repo_a, repo_b, repo_c, users, config):
     with pytest.raises(AssertionError) as e:
         repo_b.get_ref('heads/1.1')
     assert e.value.args[0].startswith("Not Found")
+
+def test_cancel_staging(env, project, repo_a, repo_b, users, config):
+    """If a batch is flagged as staging cancelling (from any PR), the staging
+    should get cancelled if and when the batch transitions to unblocked
+    """
+    with repo_a, repo_b:
+        make_branch(repo_a, 'master', 'initial', {'a': '1'})
+        make_branch(repo_b, 'master', 'initial', {'b': '1'})
+
+        pr_a = make_pr(repo_a, 'batch', [{'a': '2'}], user=config['role_user']['token'], statuses=[], reviewer=None)
+        pr_b = make_pr(repo_b, 'batch', [{'b': '2'}], user=config['role_user']['token'], statuses=[], reviewer=None)
+        pr_lone = make_pr(
+            repo_a,
+            "C",
+            [{'c': '1'}],
+            user=config['role_user']['token'],
+            reviewer=config['role_reviewer']['token'],
+        )
+    env.run_crons()
+
+    a_id, b_id, lone_id = map(to_pr, repeat(env), [pr_a, pr_b, pr_lone])
+    assert lone_id.staging_id
+    st = lone_id.staging_id
+
+    with repo_a:
+        pr_a.post_comment("hansen cancel=staging", config['role_reviewer']['token'])
+    assert a_id.state == 'opened'
+    assert a_id.cancel_staging
+    assert b_id.cancel_staging
+    assert lone_id.staging_id == st
+    with repo_a:
+        pr_a.post_comment('hansen r+', config['role_reviewer']['token'])
+    assert a_id.state == 'approved'
+    assert lone_id.staging_id == st
+    with repo_a:
+        repo_a.post_status(a_id.head, 'success', 'ci/runbot')
+        repo_a.post_status(a_id.head, 'success', 'legal/cla')
+    env.run_crons()
+    assert a_id.state == 'ready'
+    assert lone_id.staging_id == st
+
+    assert b_id.state == 'opened'
+    with repo_b:
+        pr_b.post_comment('hansen r+', config['role_reviewer']['token'])
+    assert b_id.state == 'approved'
+    assert lone_id.staging_id == st
+    with repo_b:
+        repo_b.post_status(b_id.head, 'success', 'ci/runbot')
+        repo_b.post_status(b_id.head, 'success', 'legal/cla')
+    assert b_id.state == 'approved'
+    assert lone_id.staging_id == st
+    env.run_crons()
+    assert b_id.state == 'ready'
+    # should have cancelled the staging, picked a and b, and re-staged the
+    # entire thing
+    assert lone_id.staging_id != st
+
+    assert len({
+        lone_id.staging_id.id,
+        a_id.staging_id.id,
+        b_id.staging_id.id,
+    }) == 1

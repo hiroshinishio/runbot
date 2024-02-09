@@ -92,4 +92,11 @@ class Batch(models.Model):
                     p.display_name for p in unready
                 )
             else:
+                if batch.blocked and batch.cancel_staging:
+                    batch.target.active_staging_id.cancel(
+                        'unstaged by %s on %s (%s)',
+                        self.env.user.login,
+                        batch,
+                        ', '.join(batch.prs.mapped('display_name')),
+                    )
                 batch.blocked = False

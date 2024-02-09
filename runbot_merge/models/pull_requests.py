@@ -700,7 +700,7 @@ class PullRequests(models.Model):
                     else:
                         msg = self._approve(author, login)
                 case commands.Reject() if is_author:
-                    if cancellers := self.batch_id.cancel_staging:
+                    if self.batch_id.cancel_staging:
                         self.batch_id.cancel_staging = False
                     if self.batch_id.skipchecks or self.reviewed_by:
                         if self.error:
@@ -756,14 +756,11 @@ class PullRequests(models.Model):
                             p.reviewed_by = author
                 case commands.CancelStaging() if is_admin:
                     self.batch_id.cancel_staging = True
-                    # FIXME: remove this when skipchecks properly affects state,
-                    #        maybe: staging cancellation should then only occur
-                    #        when a cancel_staging PR transitions to ready, or
-                    #        a ready PR is flagged as cancelling staging
-                    self.target.active_staging_id.cancel(
-                        "Unstaged by %s on %s",
-                        author.github_login, self.display_name,
-                    )
+                    if not self.batch_id.blocked:
+                        self.target.active_staging_id.cancel(
+                            "Unstaged by %s on %s",
+                            author.github_login, self.display_name,
+                        )
                 case commands.Override(statuses):
                     for status in statuses:
                         overridable = author.override_rights\
@@ -1081,12 +1078,6 @@ class PullRequests(models.Model):
     def write(self, vals):
         if vals.get('squash'):
             vals['merge_method'] = False
-        fields = []
-        canceler = vals.get('cancel_staging') or any(p.cancel_staging for p in self)
-        if canceler:
-            fields.append('state')
-            fields.append('skipchecks')
-        prev = {pr.id: {field: pr[field] for field in fields} for pr in self}
 
         # when explicitly marking a PR as ready
         if vals.get('state') == 'ready':
@@ -1144,21 +1135,6 @@ class PullRequests(models.Model):
         if newhead:
             c = self.env['runbot_merge.commit'].search([('sha', '=', newhead)])
             self._validate(c.statuses or '{}')
-
-        if canceler:
-            for pr in self:
-                if not pr.cancel_staging:
-                    continue
-
-                old = prev[pr.id]
-                def ready(pr):
-                    return pr['state'] == 'ready'\
-                       or (pr['skipchecks'] and pr['state'] != 'error')
-                if ready(pr) and not ready(old):
-                    if old['state'] == 'error': # error -> ready gets a bespoke message
-                        pr.target.active_staging_id.cancel(f"retrying {pr.display_name}")
-                    else:
-                        pr.target.active_staging_id.cancel(f"{pr.display_name} became ready")
         return w
 
     def _check_linked_prs_statuses(self, commit=False):

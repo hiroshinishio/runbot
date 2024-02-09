@@ -281,6 +281,8 @@ class Parser:
         return Priority.ALONE
 
     def parse_cancel(self) -> CancelStaging:
+        self.assert_next('=')
+        self.assert_next('staging')
         return CancelStaging()
 
     def parse_skipchecks(self) -> SkipChecks:
