@@ -2880,17 +2880,10 @@ class TestBatching(object):
         assert p_01.state == 'opened'
         assert p_01.priority == 'alone'
         assert p_01.skipchecks == False
-        assert p_01.cancel_staging == False
+        assert p_01.cancel_staging == True
 
-        p_01.batch_id.cancel_staging = True
-        # FIXME: cancel_staging should only cancel when the PR is or
-        #        transitions to ready
-        # assert staging_4.active
-        # re-staging, should not be necessary
-        env.run_crons()
+        assert staging_4.active, "staging should not be disabled"
 
-        staging_5 = ensure_one(sm_all.staging_id)
-        assert staging_5.active
         # cause the PR to become ready the normal way
         with repo:
             pr01.post_comment("hansen r+", config['role_reviewer']['token'])

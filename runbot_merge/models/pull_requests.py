@@ -700,8 +700,6 @@ class PullRequests(models.Model):
                     else:
                         msg = self._approve(author, login)
                 case commands.Reject() if is_author:
-                    if self.batch_id.cancel_staging:
-                        self.batch_id.cancel_staging = False
                     if self.batch_id.skipchecks or self.reviewed_by:
                         if self.error:
                             self.error = False
@@ -712,7 +710,7 @@ class PullRequests(models.Model):
                             self.env.ref("runbot_merge.command.unapprove.p0")._send(
                                 repository=self.repository,
                                 pull_request=self.number,
-                                format_args={'user': login, 'pr': self.batch_id.prs[:1]},
+                                format_args={'user': login, 'pr': self},
                             )
                         self.unstage("unreviewed (r-) by %s", login)
                     else:
