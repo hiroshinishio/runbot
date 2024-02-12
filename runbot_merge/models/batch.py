@@ -90,9 +90,14 @@ class Batch(models.Model):
             elif not batch.skipchecks and (unready := batch.prs.filtered(
                 lambda p: not (p.reviewed_by and p.status == "success")
             )):
-                batch.blocked = "Pull request(s) %s waiting for CI." % ', '.join(
-                    p.display_name for p in unready
-                )
+                unreviewed = ', '.join(unready.filtered(lambda p: not p.reviewed_by).mapped('display_name'))
+                unvalidated = ', '.join(unready.filtered(lambda p: p.status == 'pending').mapped('display_name'))
+                failed = ', '.join(unready.filtered(lambda p: p.status == 'failure').mapped('display_name'))
+                batch.blocked = "Pull request(s) %s." % ', '.join(filter(None, [
+                    unreviewed and f"{unreviewed} are waiting for review",
+                    unvalidated and f"{unvalidated} are waiting for CI",
+                    failed and f"{failed} have failed CI",
+                ]))
             else:
                 if batch.blocked and batch.cancel_staging:
                     batch.target.active_staging_id.cancel(
