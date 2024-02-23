@@ -288,9 +288,8 @@ class Branch(models.Model):
             b.display_name += ' (inactive)'
 
     def write(self, vals):
-        super().write(vals)
-        if vals.get('active') is False:
-            self.active_staging_id.cancel(
+        if vals.get('active') is False and (actives := self.filtered('active')):
+            actives.active_staging_id.cancel(
                 "Target branch deactivated by %r.",
                 self.env.user.login,
             )
@@ -299,8 +298,9 @@ class Branch(models.Model):
                 'repository': pr.repository.id,
                 'pull_request': pr.number,
                 'message': tmpl._format(pr=pr),
-            } for pr in self.prs])
+            } for pr in actives.prs])
             self.env.ref('runbot_merge.branch_cleanup')._trigger()
+        super().write(vals)
         return True
 
     @api.depends('staging_ids.active')
@@ -939,7 +939,7 @@ class PullRequests(models.Model):
         """
         root = (self.source_id or self)
         if self.target == root.limit_id:
-            return
+            return None
 
         branches = root.target.project_id.with_context(active_test=False)._forward_port_ordered()
         if (branch_filter := self.repository.branch_filter) and branch_filter != '[]':
@@ -1255,8 +1255,7 @@ class PullRequests(models.Model):
             case True if not self.closed:
                 vals['reviewed_by'] = False
                 vals['batch_id'] = False
-                if len(self.batch_id.prs) == 1:
-                    self.env.cr.precommit.add(self.batch_id.unlink)
+                self.env.cr.precommit.add(self.batch_id.unlink)
             case False if self.closed:
                 vals['batch_id'] = self._get_batch(
                     target=vals.get('target') or self.target.id,
@@ -1373,29 +1372,18 @@ class PullRequests(models.Model):
         # ignore if the PR is already being updated in a separate transaction
         # (most likely being merged?)
         self.env.cr.execute('''
-        SELECT id, state, batch_id FROM runbot_merge_pull_requests
-        WHERE id = %s AND state != 'merged'
+        SELECT batch_id FROM runbot_merge_pull_requests
+        WHERE id = %s AND state != 'merged' AND state != 'closed'
         FOR UPDATE SKIP LOCKED;
         ''', [self.id])
         r = self.env.cr.fetchone()
         if not r:
             return False
 
-        self.env.cr.execute('''
-        UPDATE runbot_merge_pull_requests
-        SET closed=True, reviewed_by = null
-        WHERE id = %s
-        ''', [self.id])
-        self.env.cr.commit()
-        self.modified(['closed', 'reviewed_by', 'batch_id'])
         self.unstage("closed by %s", by)
+        # `write` automatically unsets reviewer & batch when closing but...
+        self.write({'closed': True, 'reviewed_by': False, 'batch_id': False})
 
-        # PRs should leave their batch when *closed*, and batches must die when
-        # no PR is linked
-        old_batch = self.batch_id
-        self.batch_id = False
-        if not old_batch.prs:
-            old_batch.unlink()
         return True
 
 # ordering is a bit unintuitive because the lowest sequence (and name)
@@ -1507,10 +1495,10 @@ class Feedback(models.Model):
     """
     _name = _description = 'runbot_merge.pull_requests.feedback'
 
-    repository = fields.Many2one('runbot_merge.repository', required=True)
+    repository = fields.Many2one('runbot_merge.repository', required=True, index=True)
     # store the PR number (not id) as we may want to send feedback to PR
     # objects on non-handled branches
-    pull_request = fields.Integer(group_operator=None)
+    pull_request = fields.Integer(group_operator=None, index=True)
     message = fields.Char()
     close = fields.Boolean()
     token_field = fields.Selection(

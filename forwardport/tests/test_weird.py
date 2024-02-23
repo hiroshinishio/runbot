@@ -918,3 +918,253 @@ def test_missing_magic_ref(env, config, make_repo):
     # what they are (rather than e.g. diff the HEAD it branch with the target)
     # as a result it doesn't forwardport our fake, we'd have to reset the PR's
     # branch for that to happen
+
+def test_disable_branch_with_batches(env, config, make_repo, users):
+    """We want to avoid losing pull requests, so when deactivating a branch,
+    if there are *forward port* batches targeting that branch which have not
+    been forward ported yet port them over, as if their source had been merged
+    after the branch was disabled (thus skipped over)
+    """
+    proj, repo, fork = make_basic(env, config, make_repo, fp_token=True, fp_remote=True)
+    proj.repo_ids.required_statuses = "default"
+    branch_b = env['runbot_merge.branch'].search([('name', '=', 'b')])
+    assert branch_b
+
+    # region repo2 creation & setup
+    repo2 = make_repo('proj2')
+    with repo2:
+        [a, b, c] = repo2.make_commits(
+            None,
+            Commit("a", tree={"f": "a"}),
+            Commit("b", tree={"g": "b"}),
+            Commit("c", tree={"h": "c"}),
+        )
+        repo2.make_ref("heads/a", a)
+        repo2.make_ref("heads/b", b)
+        repo2.make_ref("heads/c", c)
+    fork2 = repo2.fork()
+    repo2_id = env['runbot_merge.repository'].create({
+        "project_id": proj.id,
+        "name": repo2.name,
+        "required_statuses": "default",
+        "fp_remote_target": fork2.name,
+    })
+    env['res.partner'].search([
+        ('github_login', '=', config['role_reviewer']['user'])
+    ]).write({
+        'review_rights': [(0, 0, {'repository_id': repo2_id.id, 'review': True})]
+    })
+    env['res.partner'].search([
+        ('github_login', '=', config['role_self_reviewer']['user'])
+    ]).write({
+        'review_rights': [(0, 0, {'repository_id': repo2_id.id, 'self_review': True})]
+    })
+    # endregion
+
+    # region set up forward ported batch
+    with repo, fork, repo2, fork2:
+        fork.make_commits("a", Commit("x", tree={"x": "1"}), ref="heads/x")
+        pr1_a = repo.make_pr(title="X", target="a", head=f"{fork.owner}:x")
+        pr1_a.post_comment("hansen r+", config['role_reviewer']['token'])
+        repo.post_status(pr1_a.head, "success")
+
+        fork2.make_commits("a", Commit("x", tree={"x": "1"}), ref="heads/x")
+        pr2_a = repo2.make_pr(title="X", target="a", head=f"{fork2.owner}:x")
+        pr2_a.post_comment("hansen r+", config['role_reviewer']['token'])
+        repo2.post_status(pr2_a.head, "success")
+    # remove just pr2 from the forward ports (maybe?)
+    pr2_a_id = to_pr(env, pr2_a)
+    pr2_a_id.limit_id = branch_b.id
+    env.run_crons()
+    assert pr2_a_id.limit_id == branch_b
+    # endregion
+
+
+    with repo, repo2:
+        repo.post_status('staging.a', 'success')
+        repo2.post_status('staging.a', 'success')
+    env.run_crons()
+
+    PullRequests = env['runbot_merge.pull_requests']
+    pr1_b_id = PullRequests.search([('parent_id', '=', to_pr(env, pr1_a).id)])
+    pr2_b_id = PullRequests.search([('parent_id', '=', pr2_a_id.id)])
+    assert pr1_b_id.parent_id
+    assert pr1_b_id.state == 'opened'
+    assert pr2_b_id.parent_id
+    assert pr2_b_id.state == 'opened'
+
+    b_id = proj.branch_ids.filtered(lambda b: b.name == 'b')
+    proj.write({
+        'branch_ids': [(1, b_id.id, {'active': False})]
+    })
+    env.run_crons()
+    assert not b_id.active
+    assert PullRequests.search_count([]) == 5, "should have ported pr1 but not pr2"
+    assert PullRequests.search([], order="number DESC", limit=1).parent_id == pr1_b_id
+
+    assert repo.get_pr(pr1_b_id.number).comments == [
+        seen(env, repo.get_pr(pr1_b_id.number), users),
+        (users['user'], "This PR targets b and is part of the forward-port chain. Further PRs will be created up to c.\n\nMore info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port\n"),
+        (users['user'], "@{user} @{reviewer} the target branch 'b' has been disabled, you may want to close this PR.\n\nAs this was not its limit, it will automatically be forward ported to the next active branch.".format_map(users)),
+    ]
+    assert repo2.get_pr(pr2_b_id.number).comments == [
+        seen(env, repo2.get_pr(pr2_b_id.number), users),
+        (users['user'], """\
+@{user} @{reviewer} this PR targets b and is the last of the forward-port chain.
+
+To merge the full chain, use
+> @hansen r+
+
+More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
+""".format_map(users)),
+        (users['user'], "@{user} @{reviewer} the target branch 'b' has been disabled, you may want to close this PR.".format_map(users)),
+    ]
+
+def test_disable_multitudes(env, config, make_repo, users, setreviewers):
+    """Ensure that deactivation ports can jump over other deactivated branches.
+    """
+    # region setup
+    repo = make_repo("bob")
+    project = env['runbot_merge.project'].create({
+        "name": "bob",
+        "github_token": config['github']['token'],
+        "github_prefix": "hansen",
+        "fp_github_token": config['github']['token'],
+        "fp_github_name": "herbert",
+        "branch_ids": [
+            (0, 0, {'name': 'a', 'sequence': 90}),
+            (0, 0, {'name': 'b', 'sequence': 80}),
+            (0, 0, {'name': 'c', 'sequence': 70}),
+            (0, 0, {'name': 'd', 'sequence': 60}),
+        ],
+        "repo_ids": [(0, 0, {
+            'name': repo.name,
+            'required_statuses': 'default',
+            'fp_remote_target': repo.name,
+        })],
+    })
+    setreviewers(project.repo_ids)
+
+    with repo:
+        [a, b, c, d] = repo.make_commits(
+            None,
+            Commit("a", tree={"branch": "a"}),
+            Commit("b", tree={"branch": "b"}),
+            Commit("c", tree={"branch": "c"}),
+            Commit("d", tree={"branch": "d"}),
+        )
+        repo.make_ref("heads/a", a)
+        repo.make_ref("heads/b", b)
+        repo.make_ref("heads/c", c)
+        repo.make_ref("heads/d", d)
+    # endregion
+
+    with repo:
+        [a] = repo.make_commits("a", Commit("X", tree={"x": "1"}), ref="heads/x")
+        pra = repo.make_pr(target="a", head="x")
+        pra.post_comment("hansen r+", config['role_reviewer']['token'])
+        repo.post_status(a, "success")
+    env.run_crons()
+
+    with repo:
+        repo.post_status('staging.a', 'success')
+    env.run_crons()
+
+    pra_id = to_pr(env, pra)
+    assert pra_id.state == 'merged'
+
+    prb_id = env['runbot_merge.pull_requests'].search([('target.name', '=', 'b')])
+    assert prb_id.parent_id == pra_id
+
+    project.write({
+        'branch_ids': [
+            (1, b.id, {'active': False})
+            for b in env['runbot_merge.branch'].search([('name', 'in', ['b', 'c'])])
+        ]
+    })
+    env.run_crons()
+
+    # should not have ported prb to the disabled branch c
+    assert not env['runbot_merge.pull_requests'].search([('target.name', '=', 'c')])
+
+    # should have ported prb to the active branch d
+    prd_id = env['runbot_merge.pull_requests'].search([('target.name', '=', 'd')])
+    assert prd_id
+    assert prd_id.parent_id == prb_id
+
+    prb = repo.get_pr(prb_id.number)
+    assert prb.comments == [
+        seen(env, prb, users),
+        (users['user'], 'This PR targets b and is part of the forward-port chain. Further PRs will be created up to d.\n\nMore info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port\n'),
+        (users['user'], """\
+@{user} @{reviewer} the target branch 'b' has been disabled, you may want to close this PR.
+
+As this was not its limit, it will automatically be forward ported to the next active branch.\
+""".format_map(users)),
+    ]
+    prd = repo.get_pr(prd_id.number)
+    assert prd.comments == [
+        seen(env, prd, users),
+        (users['user'], """\
+@{user} @{reviewer} this PR targets d and is the last of the forward-port chain.
+
+To merge the full chain, use
+> @hansen r+
+
+More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
+""".format_map(users))
+    ]
+
+def test_maintain_batch_history(env, config, make_repo, users):
+    """Batches which are part of a forward port sequence should not be deleted
+    even if all their PRs are closed.
+
+    Sadly in that case it's a bit difficult to maintain the integrity of the
+    batch as each PR being closed (until the last one?) will be removed from
+    the batch.
+    """
+    proj, repo, fork = make_basic(env, config, make_repo, fp_token=True, fp_remote=True)
+    proj.repo_ids.required_statuses = "default"
+
+    with repo, fork:
+        fork.make_commits("a", Commit("x", tree={"x": "1"}), ref="heads/x")
+        pr1_a = repo.make_pr(title="X", target="a", head=f"{fork.owner}:x")
+        pr1_a.post_comment("hansen r+", config['role_reviewer']['token'])
+        repo.post_status(pr1_a.head, "success")
+    env.run_crons()
+
+    pr1_a_id = to_pr(env, pr1_a)
+    with repo:
+        repo.post_status('staging.a', 'success')
+    env.run_crons()
+
+    pr1_b_id = env['runbot_merge.pull_requests'].search([('parent_id', '=', pr1_a_id.id)])
+    with repo:
+        repo.post_status(pr1_b_id.head, 'success')
+    env.run_crons()
+
+    pr1_c_id = env['runbot_merge.pull_requests'].search([('parent_id', '=', pr1_b_id.id)])
+
+    # region check that all the batches are set up correctly
+    assert pr1_a_id.batch_id
+    assert pr1_b_id.batch_id
+    assert pr1_c_id.batch_id
+    assert pr1_c_id.batch_id.parent_id == pr1_b_id.batch_id
+    assert pr1_b_id.batch_id.parent_id == pr1_a_id.batch_id
+    b_batch = pr1_b_id.batch_id
+    # endregion
+
+    pr1_b = repo.get_pr(pr1_b_id.number)
+    with repo:
+        pr1_b.close()
+    env.run_crons()
+    assert pr1_b_id.state == 'closed'
+
+    # region check that all the batches are *still* set up correctly
+    assert pr1_a_id.batch_id
+    assert not pr1_b_id.batch_id, "the PR still gets detached from the batch"
+    assert b_batch.exists(), "the batch is not deleted tho"
+    assert pr1_c_id.batch_id
+    assert pr1_c_id.batch_id.parent_id == b_batch
+    assert b_batch.parent_id == pr1_a_id.batch_id
+    # endregion

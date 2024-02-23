@@ -26,6 +26,7 @@ import requests
 
 from odoo import models, fields, api
 from odoo.exceptions import UserError
+from odoo.osv import expression
 from odoo.tools.misc import topological_sort, groupby
 from odoo.tools.appdirs import user_cache_dir
 from odoo.addons.base.models.res_partner import Partner
@@ -62,34 +63,42 @@ class Project(models.Model):
         originally disabled (and thus skipped over)
         """
         Batch = self.env['runbot_merge.batch']
+        ported = self.env['runbot_merge.pull_requests']
         for p in self:
             actives = previously_active_branches[p]
             for deactivated in p.branch_ids.filtered(lambda b: not b.active) & actives:
-                # if a PR targets a deactivated branch, and that's not its limit,
-                # and it doesn't have a child (e.g. CI failed), enqueue a forward
-                # port as if the now deactivated branch had been skipped over (which
-                # is the normal fw behaviour)
+                # if a non-merged batch targets a deactivated branch which is
+                # not its limit
                 extant = Batch.search([
+                    ('parent_id', '!=', False),
                     ('target', '=', deactivated.id),
-                    # FIXME: this should probably be *all* the PRs of the batch
+                    # if at least one of the PRs has a different limit
                     ('prs.limit_id', '!=', deactivated.id),
                     ('merge_date', '=', False),
-                ])
+                ]).filtered(lambda b:\
+                    # and has a next target (should already be a function of
+                    # the search but doesn't hurt)
+                    b._find_next_target() \
+                    # and has not already been forward ported
+                    and Batch.search_count([('parent_id', '=', b.id)]) == 0
+                )
+                ported |= extant.prs.filtered(lambda p: p._find_next_target())
+                # enqueue a forward port as if the now deactivated branch had
+                # been skipped over (which is the normal fw behaviour)
                 for b in extant.with_context(force_fw=True):
-                    next_target = b._find_next_target()
-                    # should not happen since we already filtered out limits
-                    if not next_target:
-                        continue
-
-                    # check if it has a descendant in the next branch, if so skip
-                    if Batch.search_count([
-                        ('parent_id', '=', b.id),
-                        ('target', '=', next_target.id)
-                    ]):
-                        continue
-
                     # otherwise enqueue a followup
                     b._schedule_fp_followup()
+
+        if not ported:
+            return
+
+        for feedback in self.env['runbot_merge.pull_requests.feedback'].search(expression.OR(
+            [('repository', '=', p.repository.id), ('pull_request', '=', p.number)]
+            for p in ported
+        )):
+            # FIXME: better signal
+            if 'disabled' in feedback.message:
+                feedback.message += '\n\nAs this was not its limit, it will automatically be forward ported to the next active branch.'
 
     def _insert_intermediate_prs(self, branches_before):
         """If new branches have been added to the sequence inbetween existing

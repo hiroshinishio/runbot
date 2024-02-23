@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-import ast
 import base64
 import contextlib
 import logging
 import os
 import re
-import typing
+from collections import defaultdict
 from collections.abc import Iterator
 
 import requests
 
 from odoo import models, fields, api
-from .pull_requests import PullRequests, Branch
 from .utils import enum
 
 
@@ -142,8 +140,8 @@ class Batch(models.Model):
     @api.depends(
         "merge_date",
         "prs.error", "prs.draft", "prs.squash", "prs.merge_method",
-        "skipchecks", "prs.status", "prs.reviewed_by",
-        "prs.target"
+        "skipchecks",
+        "prs.status", "prs.reviewed_by", "prs.target",
     )
     def _compute_stageable(self):
         for batch in self:
@@ -213,30 +211,32 @@ class Batch(models.Model):
             )
             return
 
+        PRs = self.env['runbot_merge.pull_requests']
+        targets = defaultdict(lambda: PRs)
         for p, t in zip(self.prs, all_targets):
-            if t is None:
+            if t:
+                targets[t] |= p
+            else:
                 _logger.info("Skip forward porting %s (of %s): no next target", p.display_name, self)
+
 
         # all the PRs *with a next target* should have the same, we can have PRs
         # stopping forward port earlier but skipping... probably not
-        targets = set(filter(None, all_targets))
         if len(targets) != 1:
-            m = dict(zip(all_targets, self.prs))
-            m.pop(None, None)
-            mm = dict(zip(self.prs, all_targets))
-            for pr in self.prs:
-                t = mm[pr]
-                # if a PR is skipped, don't flag it for discrepancy
-                if not t:
-                    continue
-
-                other, linked = next((target, p) for target, p in m.items() if target != t)
-                self.env.ref('runbot_merge.forwardport.failure.discrepancy')._send(
-                    repository=pr.repository,
-                    pull_request=pr.number,
-                    token_field='fp_github_token',
-                    format_args={'pr': pr, 'linked': linked, 'next': t.name, 'other': other.name},
-                )
+            for t, prs in targets.items():
+                linked, other = next((
+                    (linked, other)
+                    for other, linkeds in targets.items()
+                    if other != t
+                    for linked in linkeds
+                ))
+                for pr in prs:
+                    self.env.ref('runbot_merge.forwardport.failure.discrepancy')._send(
+                        repository=pr.repository,
+                        pull_request=pr.number,
+                        token_field='fp_github_token',
+                        format_args={'pr': pr, 'linked': linked, 'next': t.name, 'other': other.name},
+                    )
             _logger.warning(
                 "Cancelling forward-port of %s (%s): found different next branches (%s)",
                 self,
@@ -245,7 +245,7 @@ class Batch(models.Model):
             )
             return
 
-        target = targets.pop()
+        target, prs = next(iter(targets.items()))
         # this is run by the cron, no need to check if otherwise scheduled:
         # either the scheduled job is this one, or it's an other scheduling
         # which will run after this one and will see the port already exists
@@ -253,7 +253,7 @@ class Batch(models.Model):
             _logger.warning(
                 "Will not forward-port %s (%s): already ported",
                 self,
-                ', '.join(self.prs.mapped('display_name'))
+                ', '.join(prs.mapped('display_name'))
             )
             return
 
@@ -269,7 +269,7 @@ class Batch(models.Model):
         )
         conflicts = {}
         with contextlib.ExitStack() as s:
-            for pr in self.prs:
+            for pr in prs:
                 conflicts[pr], working_copy = pr._create_fp_branch(
                     target, new_branch, s)
 
@@ -281,9 +281,9 @@ class Batch(models.Model):
         # could create a batch here but then we'd have to update `_from_gh` to
         # take a batch and then `create` to not automatically resolve batches,
         # easier to not do that.
-        new_batch = self.env['runbot_merge.pull_requests'].browse(())
+        new_batch = PRs.browse(())
         self.env.cr.execute('LOCK runbot_merge_pull_requests IN SHARE MODE')
-        for pr in self.prs:
+        for pr in prs:
             owner, _ = pr.repository.fp_remote_target.split('/', 1)
             source = pr.source_id or pr
             root = pr.root_id
@@ -305,15 +305,15 @@ class Batch(models.Model):
                 # delete all the branches this should automatically close the
                 # PRs if we've created any. Using the API here is probably
                 # simpler than going through the working copies
-                for repo in self.prs.mapped('repository'):
+                for repo in prs.mapped('repository'):
                     d = gh.delete(f'https://api.github.com/repos/{repo.fp_remote_target}/git/refs/heads/{new_branch}')
                     if d.ok:
                         _logger.info("Deleting %s:%s=success", repo.fp_remote_target, new_branch)
                     else:
                         _logger.warning("Deleting %s:%s=%s", repo.fp_remote_target, new_branch, d.text)
-                raise RuntimeError("Forwardport failure: %s (%s)" % (pr.display_name, r.text))
+                raise RuntimeError(f"Forwardport failure: {pr.display_name} ({r.text})")
 
-            new_pr = pr._from_gh(r.json())
+            new_pr = PRs._from_gh(r.json())
             _logger.info("Created forward-port PR %s", new_pr)
             new_batch |= new_pr
 
@@ -335,7 +335,7 @@ class Batch(models.Model):
                     format_args={'source': source, 'pr': pr, 'new': new_pr, 'footer': FOOTER},
                 )
 
-        for pr, new_pr in zip(self.prs, new_batch):
+        for pr, new_pr in zip(prs, new_batch):
             (h, out, err, hh) = conflicts.get(pr) or (None, None, None, None)
 
             if h:
@@ -371,6 +371,8 @@ class Batch(models.Model):
                     f"* {p.display_name}\n"
                     for p in pr._iter_ancestors()
                     if p.parent_id
+                    if p.state not in ('closed', 'merged')
+                    if p.target.active
                 )
                 template = 'runbot_merge.forwardport.final'
                 format_args = {
@@ -505,3 +507,18 @@ class Batch(models.Model):
                 tip._schedule_fp_followup()
 
         return True
+
+    def unlink(self):
+        """
+        batches can be unlinked if they:
+
+        - have run out of PRs
+        - and don't have a parent batch (which is not being deleted)
+        - and don't have a child batch (which is not being deleted)
+
+        this is to keep track of forward port histories at the batch level
+        """
+        unlinkable = self.filtered(
+            lambda b: not (b.prs or (b.parent_id - self) or (self.search([('parent_id', '=', b.id)]) - self))
+        )
+        return super(Batch, unlinkable).unlink()
