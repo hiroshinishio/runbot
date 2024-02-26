@@ -3,84 +3,15 @@ from datetime import datetime
 
 import pytest
 
-from utils import seen, Commit, to_pr
+from utils import seen, Commit, to_pr, make_basic
 
-
-def make_basic(env, config, make_repo, *, fp_token, fp_remote):
-    """ Creates a basic repo with 3 forking branches
-
-    0 -- 1 -- 2 -- 3 -- 4  : a
-              |
-              `-- 11 -- 22 : b
-                  |
-                  `-- 111  : c
-    each branch just adds and modifies a file (resp. f, g and h) through the
-    contents sequence a b c d e
-    """
-    Projects = env['runbot_merge.project']
-    project = Projects.search([('name', '=', 'myproject')])
-    if not project:
-        project = Projects.create({
-            'name': 'myproject',
-            'github_token': config['github']['token'],
-            'github_prefix': 'hansen',
-            'fp_github_token': fp_token and config['github']['token'],
-            'fp_github_name': 'herbert',
-            'branch_ids': [
-                (0, 0, {'name': 'a', 'sequence': 2}),
-                (0, 0, {'name': 'b', 'sequence': 1}),
-                (0, 0, {'name': 'c', 'sequence': 0}),
-            ],
-        })
-
-    prod = make_repo('proj')
-    with prod:
-        a_0, a_1, a_2, a_3, a_4, = prod.make_commits(
-            None,
-            Commit("0", tree={'f': 'a'}),
-            Commit("1", tree={'f': 'b'}),
-            Commit("2", tree={'f': 'c'}),
-            Commit("3", tree={'f': 'd'}),
-            Commit("4", tree={'f': 'e'}),
-            ref='heads/a',
-        )
-        b_1, b_2 = prod.make_commits(
-            a_2,
-            Commit('11', tree={'g': 'a'}),
-            Commit('22', tree={'g': 'b'}),
-            ref='heads/b',
-        )
-        prod.make_commits(
-            b_1,
-            Commit('111', tree={'h': 'a'}),
-            ref='heads/c',
-        )
-    other = prod.fork()
-    repo = env['runbot_merge.repository'].create({
-        'project_id': project.id,
-        'name': prod.name,
-        'required_statuses': 'legal/cla,ci/runbot',
-        'fp_remote_target': fp_remote and other.name,
-    })
-    env['res.partner'].search([
-        ('github_login', '=', config['role_reviewer']['user'])
-    ]).write({
-        'review_rights': [(0, 0, {'repository_id': repo.id, 'review': True})]
-    })
-    env['res.partner'].search([
-        ('github_login', '=', config['role_self_reviewer']['user'])
-    ]).write({
-        'review_rights': [(0, 0, {'repository_id': repo.id, 'self_review': True})]
-    })
-
-    return project, prod, other
 
 def test_no_token(env, config, make_repo):
     """ if there's no token on the repo, nothing should break though should
     log
     """
     # create project configured with remotes on the repo but no token
-    proj, prod, _ = make_basic(env, config, make_repo, fp_token=False, fp_remote=True)
+    prod, _ = make_basic(env, config, make_repo, fp_token=False, fp_remote=True)
 
     with prod:
         prod.make_commits(
@@ -110,8 +41,8 @@ def test_no_token(env, config, make_repo):
         "should not have created forward port"
 
 def test_remove_token(env, config, make_repo):
-    proj, prod, _ = make_basic(env, config, make_repo, fp_token=True, fp_remote=True)
-    proj.fp_github_token = False
+    prod, _ = make_basic(env, config, make_repo)
+    env['runbot_merge.project'].search([]).fp_github_token = False
 
     with prod:
         prod.make_commits(
@@ -132,7 +63,7 @@ def test_remove_token(env, config, make_repo):
         "should not have created forward port"
 
 def test_no_target(env, config, make_repo):
-    proj, prod, _ = make_basic(env, config, make_repo, fp_token=True, fp_remote=False)
+    prod, _ = make_basic(env, config, make_repo, fp_remote=False)
 
     with prod:
         prod.make_commits(
@@ -153,7 +84,7 @@ def test_no_target(env, config, make_repo):
         "should not have created forward port"
 
 def test_failed_staging(env, config, make_repo):
-    proj, prod, _ = make_basic(env, config, make_repo, fp_token=True, fp_remote=True)
+    prod, _ = make_basic(env, config, make_repo)
 
     reviewer = config['role_reviewer']['token']
     with prod:
@@ -421,8 +352,9 @@ def test_new_intermediate_branch(env, config, make_repo):
     def validate(repo, commit):
         repo.post_status(commit, 'success', 'ci/runbot')
         repo.post_status(commit, 'success', 'legal/cla')
-    project, prod, _ = make_basic(env, config, make_repo, fp_token=True, fp_remote=True)
-    _, prod2, _ = make_basic(env, config, make_repo, fp_token=True, fp_remote=True)
+    prod, _ = make_basic(env, config, make_repo)
+    prod2, _ = make_basic(env, config, make_repo)
+    project = env['runbot_merge.project'].search([])
     assert len(project.repo_ids) == 2
 
     original_c_tree = prod.read_tree(prod.commit('c'))
@@ -599,7 +531,7 @@ def test_new_intermediate_branch(env, config, make_repo):
     }, "check that new got all the updates (should be in the same state as c really)"
 
 def test_author_can_close_via_fwbot(env, config, make_repo):
-    project, prod, xxx = make_basic(env, config, make_repo, fp_token=True, fp_remote=True)
+    prod, _ = make_basic(env, config, make_repo)
     other_user = config['role_other']
     other_token = other_user['token']
     other = prod.fork(token=other_token)
@@ -642,7 +574,7 @@ def test_author_can_close_via_fwbot(env, config, make_repo):
     assert pr1_id.state == 'closed'
 
 def test_skip_ci_all(env, config, make_repo):
-    project, prod, _ = make_basic(env, config, make_repo, fp_token=True, fp_remote=True)
+    prod, _ = make_basic(env, config, make_repo)
 
     with prod:
         prod.make_commits('a', Commit('x', tree={'x': '0'}), ref='heads/change')
@@ -674,7 +606,7 @@ def test_skip_ci_all(env, config, make_repo):
     assert pr2_id.source_id == pr0_id
 
 def test_skip_ci_next(env, config, make_repo):
-    project, prod, _ = make_basic(env, config, make_repo, fp_token=True, fp_remote=True)
+    prod, _ = make_basic(env, config, make_repo)
 
     with prod:
         prod.make_commits('a', Commit('x', tree={'x': '0'}), ref='heads/change')
@@ -712,7 +644,8 @@ def test_retarget_after_freeze(env, config, make_repo, users):
     latter port. In that case the reinsertion task should just do nothing, and
     the retargeted PR should be forward-ported normally once merged.
     """
-    project, prod, _ = make_basic(env, config, make_repo, fp_token=True, fp_remote=True)
+    prod, _ = make_basic(env, config, make_repo)
+    project = env['runbot_merge.project'].search([])
     with prod:
         [c] = prod.make_commits('b', Commit('thing', tree={'x': '1'}), ref='heads/mypr')
         pr = prod.make_pr(target='b', head='mypr')
@@ -788,7 +721,7 @@ def test_retarget_after_freeze(env, config, make_repo, users):
     assert new_pr_id.target == branch_c
 
 def test_approve_draft(env, config, make_repo, users):
-    _, prod, _ = make_basic(env, config, make_repo, fp_token=True, fp_remote=True)
+    prod, _ = make_basic(env, config, make_repo)
 
     with prod:
         prod.make_commits('a', Commit('x', tree={'x': '0'}), ref='heads/change')
@@ -817,7 +750,8 @@ def test_freeze(env, config, make_repo, users):
 
     - should not forward-port the freeze PRs themselves
     """
-    project, prod, _ = make_basic(env, config, make_repo, fp_token=True, fp_remote=True)
+    prod, _ = make_basic(env, config, make_repo)
+    project = env['runbot_merge.project'].search([])
     # branches here are "a" (older), "b", and "c" (master)
     with prod:
         [root, _] = prod.make_commits(
@@ -871,7 +805,7 @@ def test_missing_magic_ref(env, config, make_repo):
     Emulate this behaviour by updating the PR with a commit which lives in the
     repo but has no ref.
     """
-    _, prod, _ = make_basic(env, config, make_repo, fp_token=True, fp_remote=True)
+    prod, _ = make_basic(env, config, make_repo)
     a_head = prod.commit('refs/heads/a')
     with prod:
         [c] = prod.make_commits(a_head.id, Commit('x', tree={'x': '0'}), ref='heads/change')
@@ -925,8 +859,8 @@ def test_disable_branch_with_batches(env, config, make_repo, users):
     been forward ported yet port them over, as if their source had been merged
     after the branch was disabled (thus skipped over)
     """
-    proj, repo, fork = make_basic(env, config, make_repo, fp_token=True, fp_remote=True)
-    proj.repo_ids.required_statuses = "default"
+    repo, fork = make_basic(env, config, make_repo, statuses="default")
+    proj = env['runbot_merge.project'].search([])
     branch_b = env['runbot_merge.branch'].search([('name', '=', 'b')])
     assert branch_b
 
@@ -1123,8 +1057,7 @@ def test_maintain_batch_history(env, config, make_repo, users):
     batch as each PR being closed (until the last one?) will be removed from
     the batch.
     """
-    proj, repo, fork = make_basic(env, config, make_repo, fp_token=True, fp_remote=True)
-    proj.repo_ids.required_statuses = "default"
+    repo, fork = make_basic(env, config, make_repo, statuses="default")
 
     with repo, fork:
         fork.make_commits("a", Commit("x", tree={"x": "1"}), ref="heads/x")

@@ -55,16 +55,51 @@ class re_matches:
 def seen(env, pr, users):
     return users['user'], f'[Pull request status dashboard]({to_pr(env, pr).url}).'
 
-def make_basic(env, config, make_repo, *, reponame='proj', project_name='myproject'):
-    """ Creates a basic repo with 3 forking branches
+def make_basic(
+        env,
+        config,
+        make_repo,
+        *,
+        project_name='myproject',
+        reponame='proj',
+        statuses='legal/cla,ci/runbot',
+        fp_token=True,
+        fp_remote=True,
+):
+    """ Creates a project ``project_name`` **if none exists**, otherwise
+    retrieves the existing one and adds a new repository and its fork.
 
-    f = 0 -- 1 -- 2 -- 3 -- 4  : a
-                  |
-    g =           `-- 11 -- 22 : b
-                     |
-    h =               `-- 111  : c
+    Repositories are setup with three forking branches:
+
+    ::
+
+        f = 0 -- 1 -- 2 -- 3 -- 4  : a
+                      |
+        g =           `-- 11 -- 22 : b
+                         |
+        h =               `-- 111  : c
+
     each branch just adds and modifies a file (resp. f, g and h) through the
     contents sequence a b c d e
+
+    :param env: Environment, for odoo model interactions
+    :param config: pytest project config thingie
+    :param make_repo: repo maker function, normally the fixture, should be a
+                      ``Callable[[str], Repo]``
+    :param project_name: internal project name, can be used to recover the
+                         project object afterward, matches exactly since it's
+                         unique per odoo db (and thus test)
+    :param reponame: the base name of the repository, for identification, for
+                     concurrency reasons the actual repository name *will* be
+                     different
+    :param statuses: required statuses for the repository, stupidly default to
+                     the old Odoo statuses, should be moved to ``default`` over
+                     time for simplicity (unless the test specifically calls for
+                     multiple statuses)
+    :param fp_token: whether to set the ``fp_github_token`` on the project if
+                     / when creating it
+    :param fp_remote: whether to create a fork repo and set it as the
+                      repository's ``fp_remote_target``
     """
     Projects = env['runbot_merge.project']
     project = Projects.search([('name', '=', project_name)])
@@ -73,7 +108,7 @@ def make_basic(env, config, make_repo, *, reponame='proj', project_name='myproje
             'name': project_name,
             'github_token': config['github']['token'],
             'github_prefix': 'hansen',
-            'fp_github_token': config['github']['token'],
+            'fp_github_token': fp_token and config['github']['token'],
             'fp_github_name': 'herbert',
             'branch_ids': [
                 (0, 0, {'name': 'a', 'sequence': 100}),
@@ -104,12 +139,12 @@ def make_basic(env, config, make_repo, *, reponame='proj', project_name='myproje
             Commit('111', tree={'h': 'a'}),
             ref='heads/c',
         )
-    other = prod.fork()
+    other = prod.fork() if fp_remote else None
     repo = env['runbot_merge.repository'].create({
         'project_id': project.id,
         'name': prod.name,
-        'required_statuses': 'legal/cla,ci/runbot',
-        'fp_remote_target': other.name,
+        'required_statuses': statuses,
+        'fp_remote_target': other.name if other else False,
     })
     env['res.partner'].search([
         ('github_login', '=', config['role_reviewer']['user'])
