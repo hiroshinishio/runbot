@@ -412,17 +412,178 @@
                     <t t-else="">open</t>
                 </t>
                 <t t-call="runbot_merge.view_pull_request_info_{{tmpl.strip()}}"/>
-                <t t-set="target_cls" t-value="None if pr.target.active else 'text-muted bg-warning'"/>
                 <dl class="runbot-merge-fields">
                     <dt>label</dt>
                     <dd><span t-field="pr.label"/></dd>
                     <dt>head</dt>
                     <dd><a t-attf-href="{{pr.github_url}}/commits/{{pr.head}}"><span t-field="pr.head"/></a></dd>
-                    <dt t-att-class="target_cls">target</dt>
-                    <dd t-att-class="target_cls"><span t-field="pr.target"/></dd>
                 </dl>
+                <t t-call="runbot_merge.dashboard-table"/>
                 <p t-field="pr.message"/>
             </div></div>
         </t>
+    </template>
+
+    <record id="dashboard-pre" model="ir.actions.server">
+        <field name="name">Preparation for the preparation of the PR dashboard content</field>
+        <field name="state">code</field>
+        <field name="model_id" ref="base.model_ir_qweb"/>
+        <field name="code"><![CDATA[
+project = pr.repository.project_id
+genealogy = pr.batch_id.genealogy_ids
+repos = project.repo_ids & genealogy.all_prs.repository
+targets = genealogy.all_prs.target
+if not genealogy:
+    # if a PR is closed, it may not have a batch to get a genealogy from,
+    # in which case it's just a sole soul drifting in the deep dark
+    branches = pr.target
+    repos = pr.repository
+elif all(p.state in ('merged', 'closed') for p in genealogy[-1].all_prs):
+    branches = (project.branch_ids & targets)[::-1]
+else:
+    # if the tip of the genealogy is not closed, extend to the furthest limit,
+    # keeping branches which are active or have an associated batch / PR
+    limit = genealogy.prs.limit_id.sorted(lambda b: (b.sequence, b.name))
+    limit_high = project.branch_ids.ids.index(limit.id) if limit else None
+    limit = targets.sorted(lambda b: (b.sequence, b.name))[-1]
+    limit_low = project.branch_ids.ids.index(limit.id)
+    branches = project.branch_ids[limit_high:limit_low+1].filtered(lambda b: b.active or b in targets)[::-1]
+
+action = (project, repos, branches, genealogy)
+        ]]></field>
+    </record>
+
+    <record id="dashboard-prep" model="ir.actions.server">
+        <field name="name">Preparation of the PR dashboard content</field>
+        <field name="state">code</field>
+        <field name="model_id" ref="base.model_ir_qweb"/>
+        <field name="code"><![CDATA[
+batches = {}
+for branch in branches:
+    # FIXME: batches with inconsistent targets?
+    if genealogy:
+        prs_batch = genealogy.filtered(lambda b: b.target == branch).all_prs
+    else:
+        prs_batch = pr
+    for repo in repos:
+        prs = prs_batch.filtered(lambda p: p.repository == repo)
+        st = 0
+        detached = False
+        pr_fmt = []
+        for p in prs:
+            st |= (bool(p.error) << 2 | (p.state == 'merged') << 1 | bool(p.blocked) << 0)
+
+            done = p.state in ('closed', 'merged')
+            # this will hide the detachment signal when the PRs are merged/closed, cleaner but less correct?
+            detached = detached or bool(p.source_id and not p.parent_id and not done)
+            label = p.state
+            if p.blocked:
+                label = "%s, %s" % (label, p.blocked)
+            pr_fmt.append({
+                'pr': p,
+                'number': p.number,
+                'label': label,
+                'closed': p.closed,
+                'backend_url': "/web#view_type=form&model=runbot_merge.pull_requests&id=%d" % p.id,
+                'github_url': p.github_url,
+                'checked': done or p.status == 'success',
+                'reviewed': done or bool(p.reviewed_by),
+                'attached': done or p.parent_id or not p.source_id,
+            })
+        state = None
+        for i, s in zip(range(2, -1, -1), ['danger', 'success', 'warning']):
+            if st & (1 << i):
+                state = s
+                break
+
+        batches[repo, branch] = {
+            'active': pr in prs,
+            'detached': detached,
+            'state': state,
+            'prs': pr_fmt,
+            'pr_ids': prs,
+        }
+
+action = batches
+        ]]></field>
+    </record>
+    <template id="dashboard-table">
+        <t t-set="pre" t-value="pr.env.ref('runbot_merge.dashboard-pre').sudo()._run_action_code_multi({'pr': pr})"/>
+        <t t-set="repos" t-value="pre[1]"/>
+        <t t-set="branches" t-value="pre[2]"/>
+        <t t-set="batches" t-value="env.ref('runbot_merge.dashboard-prep').sudo()._run_action_code_multi({
+            'pr': pr,
+            'repos': repos,
+            'branches': branches,
+            'genealogy': pre[3],
+        })"/>
+        <table class="table table-bordered table-sm">
+            <colgroup>
+                <col/>
+                <col t-foreach="repos" t-as="repo"
+                     t-att-class="'bg-info' if repo == pr.repository else None"
+                />
+            </colgroup>
+            <thead>
+                <tr>
+                    <th/>
+                    <th t-foreach="repos" t-as="repo">
+                        <t t-out="repo.name"/>
+                    </th>
+                </tr>
+            </thead>
+            <tbody>
+                <!--
+                table-info looks like shit (possibly because no odoo styling so use bg-info
+                text-muted doesn't do anything, so set some opacity
+                -->
+                <tr t-foreach="branches" t-as="branch"
+                    t-att-title="None if branch.active else 'branch is disabled'"
+                    t-attf-class="{{
+                        'bg-info' if branch == pr.target else ''
+                    }} {{
+                        'inactive' if not branch.active else ''
+                    }}">
+                    <td t-out="branch.name"/>
+                    <t t-foreach="repos" t-as="repo">
+                        <t t-set="ps" t-value="batches[repo, branch]"/>
+                        <t t-set="stateclass" t-value="ps['state'] and 'table-'+ps['state']"/>
+                        <t t-set="detached" t-value="ps['detached']"/>
+                        <td t-if="ps['prs']"
+                            t-att-title="'detached' if detached else None"
+                            t-attf-class="{{
+                                'table-active' if ps['active'] else ''
+                            }} {{
+                                'detached' if detached else ''
+                            }}{{stateclass}}">
+                            <!--
+                            there should be only one PR per (repo, target) but
+                            that's not always the case
+                            -->
+                            <span t-foreach="ps['prs']" t-as="p"
+                                  t-att-title="p['label']"
+                                  t-att-class="'closed' if p['closed'] else None">
+                                <a t-attf-href="/{{repo.name}}/pull/{{p['number']}}">#<t t-out="p['number']"/></a>
+                                <a t-attf-class="fa fa-brands fa-github"
+                                   title="Open on Github"
+                                   t-att-href="p['github_url']"
+                                />
+                                <a groups="base.group_user"
+                                   title="Open in Backend"
+                                   t-attf-class="fa fa-external-link"
+                                   t-att-href="p['backend_url']"
+                                />
+                                <sup t-if="not p['checked']" class="text-danger">unchecked</sup>
+                                <sup t-if="not p['reviewed']" class="text-danger">unreviewed</sup>
+                                <sup t-if="not p['attached']"
+                                     t-attf-title="detached: {{p['pr'].detach_reason}}"
+                                     class="text-warning fa fa-unlink"/>
+                            </span>
+                        </td>
+                        <td t-else=""/>
+                    </t>
+                </tr>
+            </tbody>
+        </table>
     </template>
 </odoo>

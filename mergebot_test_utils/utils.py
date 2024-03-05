@@ -56,7 +56,8 @@ class re_matches:
         return repr(str(self))
 
 def seen(env, pr, users):
-    return users['user'], f'[Pull request status dashboard]({to_pr(env, pr).url}).'
+    url = to_pr(env, pr).url
+    return users['user'], f'[![Pull request status dashboard]({url}.png)]({url})'
 
 def make_basic(
         env,

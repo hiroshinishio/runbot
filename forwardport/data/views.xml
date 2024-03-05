@@ -136,31 +136,6 @@
                              t-attf-title="@{{pr.reviewed_by.github_login}}"/>
                 </dd>
             </t>
-            <t t-if="pr.source_id">
-                <dt>forward-port of</dt>
-                <dd>
-                    <a t-att-href="pr.source_id.url">
-                        <span t-field="pr.source_id.display_name"/>
-                    </a>
-                    <span t-if="not pr.parent_id"
-                          class="badge badge-danger user-select-none"
-                          title="A detached PR behaves like a non-forward-port, it has to be approved via the mergebot, this is usually caused by the forward-port having been in conflict or updated.">
-                        DETACHED (<span t-out="pr.detach_reason" style="white-space: pre-wrap;"/>)
-                    </span>
-                </dd>
-            </t>
-            <t t-if="pr.forwardport_ids">
-                <dt>forward-ports</dt>
-                <dd><ul>
-                    <t t-foreach="pr.forwardport_ids" t-as="p">
-                        <t t-set="bgsignal"><t t-call="forwardport.pr_background"/></t>
-                        <li t-att-class="bgsignal">
-                            <a t-att-href="p.url"><span t-field="p.display_name"/></a>
-                            targeting <span t-field="p.target.name"/>
-                        </li>
-                    </t>
-                </ul></dd>
-            </t>
         </xpath>
     </template>
 

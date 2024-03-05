@@ -53,7 +53,6 @@ def test_trivial_flow(env, repo, page, users, config):
     )) == {
         'label': f"{config['github']['owner']}:other",
         'head': c1,
-        'target': 'master',
     }
 
     with repo:

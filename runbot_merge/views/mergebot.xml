@@ -131,49 +131,41 @@
                         </h1>
                         <h2>
                           <field name="state"/>
-                          <span attrs="{'invisible': [('blocked', '=', False)]}">
-                            (<field name="blocked"/>)
+                          <span attrs="{'invisible': ['|', ('state', '=', 'merged'), ('blocked', '=', False)]}">
+                            (blocked: <field name="blocked"/>)
                           </span>
+                            <span attrs="{'invisible': [('state', '!=', 'merged')]}">
+                                (<field name="merge_date"/>)
+                            </span>
                         </h2>
                     </div>
-                    <!-- massively impactful status items -->
-                    <group>
-                      <group>
-                            <field name="skipchecks" widget="boolean_toggle"/>
-                      </group>
-                      <group>
-                            <field name="cancel_staging" widget="boolean_toggle"/>
-                      </group>
-                    </group>
                     <!-- main PR metadata -->
                     <group>
-                        <group name="metadata">
+                        <group name="metadata" colspan="2">
+                            <field name="batch_id"/>
                             <field name="target"/>
-                            <field name="label"/>
                             <field name="author"/>
                             <field name="head"/>
                         </group>
                         <group name="merging">
-                            <field name="priority"/>
                             <field name="merge_method"/>
                             <field name="squash"/>
                             <field name="draft"/>
-<!--                            <field string="Up To" name="limit_id"/>-->
-<!--                            <field string="Forward-Port Policy" name="fw_policy"/>-->
+                            <field name="priority"/>
+                            <field name="skipchecks" widget="boolean_toggle"/>
+                            <field name="cancel_staging" widget="boolean_toggle"/>
+                            <field name="limit_id"/>
                         </group>
                     </group>
                     <!-- influencers -->
                     <group string="State">
-                        <group>
-                            <field name="merge_date"/>
+                        <group colspan="4">
                             <field name="reviewed_by"/>
                             <field name="error"/>
                             <field name="closed"/>
-                        </group>
-                        <group name="status">
                             <field name="status"/>
-                            <field name="statuses"/>
                             <field name="overrides"/>
+                            <field name="statuses"/>
                         </group>
                     </group>
                     <group string="Forward Porting">
@@ -290,6 +282,15 @@
                             </field>
                         </group>
                     </group>
+                    <group string="Batches">
+                        <field name="batch_ids" colspan="4" nolabel="1" readonly="1">
+                            <tree>
+                                <button type="object" name="get_formview_action" icon="fa-external-link"/>
+                                <field name="name"/>
+                                <field name="prs" widget="many2many_tags"/>
+                            </tree>
+                        </field>
+                    </group>
                     <group string="PRs">
                         <field name="pr_ids" colspan="4" nolabel="1" readonly="1">
                             <tree>
@@ -297,14 +298,6 @@
                                 <field name="display_name"/>
                                 <field name="github_url" widget="url"/>
                                 <field name="url" widget="url"/>
-                            </tree>
-                        </field>
-                    </group>
-                    <group string="Batches">
-                        <field name="batch_ids" colspan="4" nolabel="1" readonly="1">
-                            <tree>
-                                <button type="object" name="get_formview_action" icon="fa-external-link"/>
-                                <field name="prs" widget="many2many_tags"/>
                             </tree>
                         </field>
                     </group>

@@ -53,6 +53,7 @@ class Batch(models.Model):
     _inherit = ['mail.thread']
     _parent_store = True
 
+    name = fields.Char(compute="_compute_name")
     target = fields.Many2one('runbot_merge.branch', store=True, compute='_compute_target')
     batch_staging_ids = fields.One2many('runbot_merge.staging.batch', 'runbot_merge_batch_id')
     staging_ids = fields.Many2many(
@@ -176,6 +177,11 @@ class Batch(models.Model):
     def _search_open_prs(self, operator, value):
         return [('all_prs', operator, value), ('active', '=', True)]
 
+    @api.depends("prs.label")
+    def _compute_name(self):
+        for batch in self:
+            batch.name = batch.prs[:1].label or batch.all_prs[:1].label
+
     @api.depends("all_prs.target")
     def _compute_target(self):
         for batch in self:
@@ -189,7 +195,6 @@ class Batch(models.Model):
                     batch.target = targets.pop()
                 else:
                     batch.target = False
-
 
     @api.depends(
         "merge_date",

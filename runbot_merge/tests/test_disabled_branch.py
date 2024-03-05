@@ -59,12 +59,9 @@ def test_existing_pr_disabled_branch(env, project, make_repo, setreviewers, conf
     assert staging_id.reason == "Target branch deactivated by 'admin'."
 
     p = pr_page(page, pr)
-    target = dict(zip(
-        (e.text for e in p.cssselect('dl.runbot-merge-fields dt')),
-        (p.cssselect('dl.runbot-merge-fields dd'))
-    ))['target']
-    assert target.text_content() == 'other (inactive)'
-    assert target.get('class') == 'text-muted bg-warning'
+    [target] = p.cssselect('table tr.bg-info')
+    assert 'inactive' in target.classes
+    assert target[0].text_content() == "other"
 
     assert pr.comments == [
         (users['reviewer'], "hansen r+"),

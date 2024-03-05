@@ -1109,11 +1109,9 @@ def test_multi_project(env, make_repo, setreviewers, users, config,
 
     assert pr1.comments == [
         (users['reviewer'], 'hansen r+'),
-        (users['user'], f'[Pull request status dashboard]({pr1_id.url}).'),
+        seen(env, pr1, users),
     ]
-    assert pr2.comments == [
-        (users['user'], f'[Pull request status dashboard]({pr2_id.url}).'),
-    ]
+    assert pr2.comments == [seen(env, pr2, users)]
 
 def test_freeze_complete(env, project, repo_a, repo_b, repo_c, users, config):
     """ Tests the freeze wizard feature (aside from the UI):
