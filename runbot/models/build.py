@@ -1062,7 +1062,7 @@ class BuildResult(models.Model):
             if not self.params_id.skip_requirements and os.path.isfile(commit_id._source_path('requirements.txt')):
                 repo_dir = self._docker_source_folder(commit_id)
                 requirement_path = os.sep.join([repo_dir, 'requirements.txt'])
-                pres.append([f'python{py_version}', '-m', 'pip', 'install','--user', '--progress-bar', 'off', '-r', f'{requirement_path}'])
+                pres.append([f'python{py_version}', '-m', 'pip', 'install', '--user', '--progress-bar', 'off', '-r', f'{requirement_path}'])
 
         addons_paths = self._get_addons_path()
         (server_commit, server_file) = self._get_server_info()
@@ -1073,7 +1073,7 @@ class BuildResult(models.Model):
         if sub_command:
             cmd += [sub_command]
 
-        if not self.params_id.extra_params or '--addons-path' not in self.params_id.extra_params :
+        if not self.params_id.extra_params or '--addons-path' not in self.params_id.extra_params:
             cmd += ['--addons-path', ",".join(addons_paths)]
 
         # options
@@ -1083,7 +1083,12 @@ class BuildResult(models.Model):
         if grep(config_path, "no-netrpc"):
             cmd.append("--no-netrpc")
 
-        command = Command(pres, cmd, [], cmd_checker=build)
+        pres += self.params_id.config_data.get('pres', [])
+        posts = self.params_id.config_data.get('posts', [])
+        finals = self.params_id.config_data.get('finals', [])
+        config_tuples = self.params_id.config_data.get('config_tuples', [])
+
+        command = Command(pres, cmd, posts, finals=finals, config_tuples=config_tuples, cmd_checker=build) 
 
         # use the username of the runbot host to connect to the databases
         command.add_config_tuple('db_user', '%s' % pwd.getpwuid(os.getuid()).pw_name)
