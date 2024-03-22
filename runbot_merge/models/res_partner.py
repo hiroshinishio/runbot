@@ -1,7 +1,10 @@
 import random
 from email.utils import parseaddr
 
-from odoo import fields, models, tools, api
+from markupsafe import Markup, escape
+
+import odoo.tools
+from odoo import fields, models, tools, api, Command
 
 from .. import github
 
@@ -11,7 +14,8 @@ class CIText(fields.Char):
     column_cast_from = ('varchar', 'text')
 
 class Partner(models.Model):
-    _inherit = 'res.partner'
+    _name = 'res.partner'
+    _inherit = ['res.partner', 'mail.thread']
 
     email = fields.Char(index=True)
     github_login = CIText()
@@ -50,6 +54,66 @@ class Partner(models.Model):
     def _compute_sensitive_overrides(self):
         for p in self:
             p.override_sensitive = any(o.context == 'ci/security' for o in p.override_rights)
+
+    def write(self, vals):
+        created = []
+        updated = {}
+        deleted = set()
+        for cmd, id, values in vals.get('review_rights', []):
+            if cmd == Command.DELETE:
+                deleted.add(id)
+            elif cmd == Command.CREATE:
+                # 'repository_id': 3, 'review': True, 'self_review': False
+                created.append(values)
+            elif cmd == Command.UPDATE:
+                updated[id] = values
+            #  could also be LINK for records which are not touched but we don't care
+
+        new_rights = None
+        if r := vals.get('override_rights'):
+            # only handle reset (for now?) even though technically e.g. 0 works
+            # the web client doesn't seem to use it (?)
+            if r[0][0] == 6:
+                new_rights = self.env['res.partner.override'].browse(r[0][2])
+
+        Repo = self.env['runbot_merge.repository'].browse
+        for p in self:
+            msgs = []
+            if ds := p.review_rights.filtered(lambda r: r.id in deleted):
+                msgs.append("removed review rights on {}\n".format(
+                    ', '.join(ds.mapped('repository_id.name'))
+                ))
+            if us := p.review_rights.filtered(lambda r: r.id in updated):
+                msgs.extend(
+                    "updated review rights on {}: {}\n".format(
+                        u.repository_id.name,
+                        ', '.join(
+                            f'allowed {f}' if v else f'forbid {f}'
+                            for f in ['review', 'self_review']
+                            if (v := updated[u.id].get(f)) is not None
+                        )
+                    )
+                    for u in us
+                )
+            msgs.extend(
+                'added review rights on {}: {}\n'.format(
+                    Repo(c['repository_id']).name,
+                    ', '.join(filter(c.get, ['review', 'self_review'])),
+                )
+                for c in created
+            )
+            if new_rights is not None:
+                for r in p.override_rights - new_rights:
+                    msgs.append(f"removed override rights for {r.context!r} on {r.repository_id.name}")
+                for r in new_rights - p.override_rights:
+                    msgs.append(f"added override rights for {r.context!r} on {r.repository_id.name}")
+            if msgs:
+                p._message_log(body=Markup('<ul>{}</ul>').format(Markup().join(
+                    map(Markup('<li>{}</li>').format, reversed(msgs))
+                )))
+
+        return super().write(vals)
+
 
 class PartnerMerge(models.TransientModel):
     _inherit = 'base.partner.merge.automatic.wizard'
@@ -108,6 +172,42 @@ class OverrideRights(models.Model):
             self.env.cr, 'res_partner_override_unique', self._table,
             ['context', 'coalesce(repository_id, 0)']
         )
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        for partner, contexts in odoo.tools.groupby((
+            (partner_id, vals['context'], vals['repository_id'])
+            for vals in vals_list
+            # partner_ids is of the form [Command.set(ids)
+            for partner_id in vals.get('partner_ids', [(None, None, [])])[0][2]
+        ), lambda p: p[0]):
+            partner = self.env['res.partner'].browse(partner)
+            for _, context, repository in contexts:
+                repository = self.env['runbot_merge.repository'].browse(repository)
+                partner._message_log(body=f"added override rights for {context!r} on {repository.name}")
+
+        return super().create(vals_list)
+
+    def write(self, vals):
+        new = None
+        if pids := vals.get('partner_ids'):
+            new = self.env['res.partner'].browse(pids[0][2])
+        if new is not None:
+            for o in self:
+                added = new - o.partner_ids
+                removed = o.partner_ids - new
+                for p in added:
+                    p._message_log(body=f"added override rights for {o.context!r} on {o.repository_id.name}")
+                for r in removed:
+                    r._message_log(body=f"removed override rights for {o.context!r} on {o.repository_id.name}")
+
+        return super().write(vals)
+
+    def unlink(self):
+        for o in self:
+            for p in o.partner_ids:
+                p._message_log(body=f"removed override rights for {o.context!r} on {o.repository_id.name}")
+        return super().unlink()
 
     @api.model
     def name_search(self, name='', args=None, operator='ilike', limit=100):
