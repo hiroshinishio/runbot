@@ -17,6 +17,7 @@ import json
 import logging
 import operator
 import subprocess
+import sys
 import tempfile
 import typing
 from pathlib import Path
@@ -195,7 +196,19 @@ class PullRequests(models.Model):
 
         if vals.get('parent_id') and 'source_id' not in vals:
             vals['source_id'] = self.browse(vals['parent_id']).root_id.id
-        return super().create(vals)
+        pr = super().create(vals)
+
+        # added a new PR to an already forward-ported batch: port the PR
+        if self.env['runbot_merge.batch'].search_count([
+            ('parent_id', '=', pr.batch_id.id),
+        ]):
+            self.env['forwardport.batches'].create({
+                'batch_id': pr.batch_id.id,
+                'source': 'complete',
+                'pr_id': pr.id,
+            })
+
+        return pr
 
     def write(self, vals):
         # if the PR's head is updated, detach (should split off the FP lines as this is not the original code)

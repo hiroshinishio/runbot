@@ -1,4 +1,8 @@
-from utils import Commit, make_basic, to_pr
+import re
+
+import pytest
+
+from utils import Commit, make_basic, to_pr, seen, re_matches
 
 
 def test_single_updated(env, config, make_repo):
@@ -133,19 +137,17 @@ def test_closing_during_fp(env, config, make_repo, users):
 def test_add_pr_during_fp(env, config, make_repo, users):
     """ It should be possible to add new PRs to an FP batch
     """
-    r1, _ = make_basic(env, config, make_repo)
-    r2, fork2 = make_basic(env, config, make_repo)
-    repos = env['runbot_merge.repository'].search([])
-    repos.required_statuses = 'default'
+    r1, _ = make_basic(env, config, make_repo, statuses="default")
+    r2, fork2 = make_basic(env, config, make_repo, statuses="default")
     # needs a "d" branch
-    repos[0].project_id.write({
+    env['runbot_merge.project'].search([]).write({
         'branch_ids': [(0, 0, {'name': 'd', 'sequence': 40})],
     })
     with r1, r2:
         r1.make_ref("heads/d", r1.commit("c").id)
         r2.make_ref("heads/d", r2.commit("c").id)
 
-    with r1, r2:
+    with r1:
         r1.make_commits('a', Commit('1', tree={'1': '0'}), ref='heads/aref')
         pr1_a = r1.make_pr(target='a', head='aref')
         r1.post_status('aref', 'success')
@@ -211,3 +213,177 @@ def test_add_pr_during_fp(env, config, make_repo, users):
 
     assert find_child(pr1_c_id)
     assert find_child(pr2_c_id)
+
+def test_add_to_forward_ported(env, config, make_repo, users):
+    """Add a new branch to an intermediate step of a fw *sequence*, either
+    because skipci or because all the intermediate CI succeeded
+    """
+    # region setup
+    r1, _ = make_basic(env, config, make_repo, statuses="default")
+    r2, fork2 = make_basic(env, config, make_repo, statuses="default")
+
+    with r1:
+        r1.make_commits('a', Commit('a', tree={'a': 'a'}), ref="heads/pr1")
+        pr1_a = r1.make_pr(target="a", head="pr1")
+        r1.post_status(pr1_a.head, 'success')
+        pr1_a.post_comment('hansen r+', config['role_reviewer']['token'])
+    env.run_crons()
+    with r1, r2:
+        r1.post_status('staging.a', 'success')
+        r2.post_status('staging.a', 'success')
+    env.run_crons()
+
+    # region port forward
+    pr1_a_id = to_pr(env, pr1_a)
+    pr1_b_id = pr1_a_id.forwardport_ids
+    assert pr1_b_id
+    with r1:
+        r1.post_status(pr1_b_id.head, 'success')
+    env.run_crons()
+    pr1_c_id = pr1_a_id.forwardport_ids - pr1_b_id
+    assert pr1_c_id
+    # endregion
+    # endregion
+
+    # new PR must be in fork for labels to actually match
+    with r2, fork2:
+        # branch in fork has no owner prefix, but HEAD for cross-repo PR does
+        fork2.make_commits("b", Commit('b', tree={'b': 'b'}), ref=f'heads/{pr1_b_id.refname}')
+        pr2_b = r2.make_pr(title="b", target="b", head=pr1_b_id.label)
+        r2.post_status(pr2_b.head, 'success')
+    env.run_crons()
+
+    pr2_b_id = to_pr(env, pr2_b)
+    assert pr2_b_id.batch_id == pr1_b_id.batch_id
+    assert len(pr2_b_id.forwardport_ids) == 1, \
+        "since the batch is already forward ported, the new PR should" \
+         " immediately be forward ported to match"
+    assert pr2_b_id.forwardport_ids.label == pr1_c_id.label
+
+    pr2_a = r1.get_pr(pr1_b_id.number)
+    with r1, r2:
+        pr2_a.post_comment('hansen r+', config['role_reviewer']['token'])
+        pr2_b.post_comment("hansen r+", config['role_reviewer']['token'])
+    env.run_crons()
+
+    with r1, r2:
+        r1.post_status('staging.b', 'success')
+        r2.post_status('staging.b', 'success')
+    env.run_crons()
+
+    assert pr1_b_id.state == 'merged'
+    assert pr2_b_id.state == 'merged'
+
+    assert len(pr2_b_id.forwardport_ids) == 1,\
+        "verify that pr2_b did not get forward ported again on merge"
+    pr2_c = r2.get_pr(pr2_b_id.forwardport_ids.number)
+    assert pr2_c.comments == [
+        seen(env, pr2_c, users),
+        (users['user'], '''\
+@{user} this PR targets c and is the last of the forward-port chain.
+
+To merge the full chain, use
+> @hansen r+
+
+More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
+'''.format_map(users)),
+    ]
+
+def test_add_to_forward_port_conflict(env, config, make_repo, users):
+    """If a PR is added to an existing forward port sequence, and it causes
+    conflicts when forward ported, it should be treated similarly to an *update*
+    causing a conflict: the PR is still created, but it's set in conflict.
+    """
+    # region setup
+    r1, _ = make_basic(env, config, make_repo, statuses="default")
+    r2, fork2 = make_basic(env, config, make_repo, statuses="default")
+    project = env['runbot_merge.project'].search([])
+    with r2:
+        r2.make_commits(
+            "c",
+            Commit("C-onflict", tree={"b": "X"}),
+            ref="heads/c"
+        )
+
+    with r1:
+        r1.make_commits('a', Commit('a', tree={'a': 'a'}), ref="heads/pr1")
+        pr1_a = r1.make_pr(target="a", head="pr1")
+        r1.post_status(pr1_a.head, 'success')
+        pr1_a.post_comment('hansen r+', config['role_reviewer']['token'])
+    env.run_crons()
+    with r1, r2:
+        r1.post_status('staging.a', 'success')
+        r2.post_status('staging.a', 'success')
+    env.run_crons()
+
+    # region port forward
+    pr1_a_id = to_pr(env, pr1_a)
+    pr1_b_id = pr1_a_id.forwardport_ids
+    assert pr1_b_id
+    with r1:
+        r1.post_status(pr1_b_id.head, 'success')
+    env.run_crons()
+    pr1_c_id = pr1_a_id.forwardport_ids - pr1_b_id
+    assert pr1_c_id
+    # endregion
+    # endregion
+
+    # new PR must be in fork for labels to actually match
+    with r2, fork2:
+        # branch in fork has no owner prefix, but HEAD for cross-repo PR does
+        fork2.make_commits("b", Commit('b', tree={'b': 'b'}), ref=f'heads/{pr1_b_id.refname}')
+        pr2_b = r2.make_pr(title="b", target="b", head=pr1_b_id.label)
+        r2.post_status(pr2_b.head, 'success')
+    env.run_crons()
+
+    pr2_b_id = to_pr(env, pr2_b)
+    assert pr2_b_id.batch_id == pr1_b_id.batch_id
+    pr2_c_id = pr2_b_id.forwardport_ids
+    assert len(pr2_c_id) == 1, \
+        "since the batch is already forward ported, the new PR should" \
+         " immediately be forward ported to match"
+    assert pr2_c_id.label == pr1_c_id.label
+    assert not pr2_c_id.parent_id, "conflict -> should be detached"
+    assert pr2_c_id.detach_reason
+
+    pr2_a = r1.get_pr(pr1_b_id.number)
+    with r1, r2:
+        pr2_a.post_comment('hansen r+', config['role_reviewer']['token'])
+        pr2_b.post_comment("hansen r+", config['role_reviewer']['token'])
+    env.run_crons()
+
+    with r1, r2:
+        r1.post_status('staging.b', 'success')
+        r2.post_status('staging.b', 'success')
+    env.run_crons()
+
+    assert pr1_b_id.state == 'merged'
+    assert pr2_b_id.state == 'merged'
+
+    pr2_c = r2.get_pr(pr2_c_id.number)
+    assert pr2_c.comments == [
+        seen(env, pr2_c, users),
+        # should have conflicts
+        (users['user'], re_matches(r"""@{user} cherrypicking of pull request {previous.display_name} failed\.
+
+stdout:
+```
+Auto-merging b
+CONFLICT \(add/add\): Merge conflict in b
+
+```
+
+stderr:
+```
+.*
+```
+
+Either perform the forward-port manually \(and push to this branch, proceeding as usual\) or close this PR \(maybe\?\)\.
+
+In the former case, you may want to edit this PR message as well\.
+
+:warning: after resolving this conflict, you will need to merge it via @{project.github_prefix}\.
+
+More info at https://github\.com/odoo/odoo/wiki/Mergebot#forward-port
+""".format(project=project, previous=pr2_b_id, **users), re.DOTALL))
+    ]

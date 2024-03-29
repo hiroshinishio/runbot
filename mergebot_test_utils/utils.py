@@ -49,8 +49,11 @@ class re_matches:
     def __eq__(self, text):
         return self._r.match(text)
 
+    def __str__(self):
+        return re.sub(r'\\(.)', r'\1', self._r.pattern)
+
     def __repr__(self):
-        return repr(self._r.pattern)
+        return repr(str(self))
 
 def seen(env, pr, users):
     return users['user'], f'[Pull request status dashboard]({to_pr(env, pr).url}).'

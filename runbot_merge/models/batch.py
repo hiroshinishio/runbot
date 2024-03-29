@@ -82,13 +82,13 @@ class Batch(models.Model):
         # in DB both will prefix-match on the literal prefix then apply a
         # trivial filter (even though the filter is technically unnecessary for
         # the first form), doing it like this means we don't have to `- self`
-        # in the `not includ_self` case
+        # in the ``not include_self`` case
         if include_self:
             pattern = self.parent_path + '%'
         else:
             pattern = self.parent_path + '_%'
 
-        return self.search([("parent_path", '=like', pattern)])
+        return self.search([("parent_path", '=like', pattern)], order="parent_path")
 
     # also depends on all the descendants of the source or sth
     @api.depends('parent_path')
@@ -323,9 +323,10 @@ class Batch(models.Model):
                 'source_id': source.id,
                 # only link to previous PR of sequence if cherrypick passed
                 'parent_id': pr.id if not has_conflicts else False,
-                'detach_reason': "conflicts: {}".format(
-                    f'\n{conflicts[pr]}\n{conflicts[pr]}'.strip()
-                ) if has_conflicts else None,
+                'detach_reason': "conflicts:\n{}".format('\n\n'.join(
+                    f"{out}\n{err}".strip()
+                    for _, out, err, _ in filter(None, conflicts.values())
+                )) if has_conflicts else None,
             })
             if has_conflicts and pr.parent_id and pr.state not in ('merged', 'closed'):
                 self.env.ref('runbot_merge.forwardport.failure.conflict')._send(
@@ -336,63 +337,7 @@ class Batch(models.Model):
                 )
 
         for pr, new_pr in zip(prs, new_batch):
-            (h, out, err, hh) = conflicts.get(pr) or (None, None, None, None)
-
-            if h:
-                sout = serr = ''
-                if out.strip():
-                    sout = f"\nstdout:\n```\n{out}\n```\n"
-                if err.strip():
-                    serr = f"\nstderr:\n```\n{err}\n```\n"
-
-                lines = ''
-                if len(hh) > 1:
-                    lines = '\n' + ''.join(
-                        '* %s%s\n' % (sha, ' <- on this commit' if sha == h else '')
-                        for sha in hh
-                    )
-                template = 'runbot_merge.forwardport.failure'
-                format_args = {
-                    'pr': new_pr,
-                    'commits': lines,
-                    'stdout': sout,
-                    'stderr': serr,
-                    'footer': FOOTER,
-                }
-            elif has_conflicts:
-                template = 'runbot_merge.forwardport.linked'
-                format_args = {
-                    'pr': new_pr,
-                    'siblings': ', '.join(p.display_name for p in (new_batch - new_pr)),
-                    'footer': FOOTER,
-                }
-            elif not new_pr._find_next_target():
-                ancestors = "".join(
-                    f"* {p.display_name}\n"
-                    for p in pr._iter_ancestors()
-                    if p.parent_id
-                    if p.state not in ('closed', 'merged')
-                    if p.target.active
-                )
-                template = 'runbot_merge.forwardport.final'
-                format_args = {
-                    'pr': new_pr,
-                    'containing': ' containing:' if ancestors else '.',
-                    'ancestors': ancestors,
-                    'footer': FOOTER,
-                }
-            else:
-                template = 'runbot_merge.forwardport.intermediate'
-                format_args = {
-                    'pr': new_pr,
-                    'footer': FOOTER,
-                }
-            self.env.ref(template)._send(
-                repository=new_pr.repository,
-                pull_request=new_pr.number,
-                token_field='fp_github_token',
-                format_args=format_args,
-            )
+            new_pr._fp_conflict_feedback(pr, conflicts)
 
             labels = ['forwardport']
             if has_conflicts:
@@ -408,7 +353,6 @@ class Batch(models.Model):
         # try to schedule followup
         new_batch._schedule_fp_followup()
         return new_batch
-
 
     def _schedule_fp_followup(self):
         _logger = logging.getLogger(__name__).getChild('forwardport.next')

@@ -26,6 +26,7 @@ from .utils import enum
 from .. import github, exceptions, controllers, utils
 
 _logger = logging.getLogger(__name__)
+FOOTER = '\nMore info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port\n'
 
 
 class StatusConfiguration(models.Model):
@@ -1385,6 +1386,64 @@ class PullRequests(models.Model):
         self.write({'closed': True, 'reviewed_by': False, 'batch_id': False})
 
         return True
+
+    def _fp_conflict_feedback(self, previous_pr, conflicts):
+        (h, out, err, hh) = conflicts.get(previous_pr) or (None, None, None, None)
+        if h:
+            sout = serr = ''
+            if out.strip():
+                sout = f"\nstdout:\n```\n{out}\n```\n"
+            if err.strip():
+                serr = f"\nstderr:\n```\n{err}\n```\n"
+
+            lines = ''
+            if len(hh) > 1:
+                lines = '\n' + ''.join(
+                    '* %s%s\n' % (sha, ' <- on this commit' if sha == h else '')
+                    for sha in hh
+                )
+            template = 'runbot_merge.forwardport.failure'
+            format_args = {
+                'pr': self,
+                'commits': lines,
+                'stdout': sout,
+                'stderr': serr,
+                'footer': FOOTER,
+            }
+        elif any(conflicts.values()):
+            template = 'runbot_merge.forwardport.linked'
+            format_args = {
+                'pr': self,
+                'siblings': ', '.join(p.display_name for p in (self.batch_id - self)),
+                'footer': FOOTER,
+            }
+        elif not self._find_next_target():
+            ancestors = "".join(
+                f"* {p.display_name}\n"
+                for p in previous_pr._iter_ancestors()
+                if p.parent_id
+                if p.state not in ('closed', 'merged')
+                if p.target.active
+            )
+            template = 'runbot_merge.forwardport.final'
+            format_args = {
+                'pr': self,
+                'containing': ' containing:' if ancestors else '.',
+                'ancestors': ancestors,
+                'footer': FOOTER,
+            }
+        else:
+            template = 'runbot_merge.forwardport.intermediate'
+            format_args = {
+                'pr': self,
+                'footer': FOOTER,
+            }
+        self.env.ref(template)._send(
+            repository=self.repository,
+            pull_request=self.number,
+            token_field='fp_github_token',
+            format_args=format_args,
+        )
 
 # ordering is a bit unintuitive because the lowest sequence (and name)
 # is the last link of the fp chain, reasoning is a bit more natural the
