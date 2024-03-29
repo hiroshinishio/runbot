@@ -109,14 +109,16 @@ class Batch(models.Model):
     def _process(self):
         processed = self.browse()
         for batch in self:
-            if batch.state == 'preparing' and batch.last_update < fields.Datetime.now() - datetime.timedelta(seconds=60):
+            if batch.state == 'preparing' and batch.last_update <= fields.Datetime.now() - datetime.timedelta(seconds=60):
                 batch._prepare()
                 processed |= batch
-            elif batch.state == 'ready' and all(slot.build_id.global_state in (False, 'running', 'done') for slot in batch.slot_ids):
-                _logger.info('Batch %s is done', self.id)
-                batch._log('Batch done')
-                batch.state = 'done'
-                processed |= batch
+            if batch.state == 'ready':
+                self._start_builds()
+                if all(slot.build_id.global_state in (False, 'running', 'done') for slot in batch.slot_ids):
+                    _logger.info('Batch %s is done', self.id)
+                    batch._log('Batch done')
+                    batch.state = 'done'
+                    processed |= batch
         return processed
 
     def _create_build(self, params):
@@ -326,7 +328,6 @@ class Batch(models.Model):
             for commit_link in self.commit_link_ids:
                 commit_link.commit_id = commit_link.commit_id._rebase_on(commit_link.base_commit_id)
         commit_link_by_repos = {commit_link.commit_id.repo_id.id: commit_link for commit_link in self.commit_link_ids}
-        bundle_repos = bundle.branch_ids.mapped('remote_id.repo_id')
         version_id = self.bundle_id.version_id.id
         project_id = self.bundle_id.project_id.id
         trigger_customs = {}
@@ -360,19 +361,11 @@ class Batch(models.Model):
 
             params = self.env['runbot.build.params'].create(params_value)
 
-            build = self.env['runbot.build']
-            link_type = 'created'
-            force_trigger = trigger_custom and trigger_custom.start_mode == 'force'
-            skip_trigger = (trigger_custom and trigger_custom.start_mode == 'disabled') or trigger.manual
-            should_start = ((trigger.repo_ids & bundle_repos) or bundle.build_all or bundle.sticky)
-            if force_trigger or (should_start and not skip_trigger):  # only auto link build if bundle has a branch for this trigger
-                link_type, build = self._create_build(params)
             self.env['runbot.batch.slot'].create({
                 'batch_id': self.id,
                 'trigger_id': trigger.id,
-                'build_id': build.id,
                 'params_id': params.id,
-                'link_type': link_type,
+                'link_type': 'created',
             })
 
         ######################################
@@ -387,6 +380,29 @@ class Batch(models.Model):
                 ('category_id', '=', default_category.id)
             ])
             skippable._skip()
+
+    def _start_builds(self):
+        self.ensure_one()
+        bundle = self.bundle_id
+        bundle_repos = bundle.branch_ids.mapped('remote_id.repo_id')
+        success_trigger = self.slot_ids.filtered(lambda s: s.build_id.global_state in ('running', 'done') and s.build_id.global_result == "ok").trigger_id
+        trigger_customs = {}
+        for trigger_custom in self.bundle_id.trigger_custom_ids:
+            trigger_customs[trigger_custom.trigger_id] = trigger_custom
+        for slot in self.slot_ids:
+            if slot.build_id:
+                continue
+            trigger = slot.trigger_id
+            if trigger.starts_after_ids - success_trigger:  # some required triggers are missing
+                continue
+
+            trigger_custom = trigger_customs.get(trigger, self.env['runbot.bundle.trigger.custom'])
+            force_trigger = trigger_custom and trigger_custom.start_mode == 'force'
+            skip_trigger = (trigger_custom and trigger_custom.start_mode == 'disabled') or trigger.manual
+            should_start = ((trigger.repo_ids & bundle_repos) or bundle.build_all or bundle.sticky)
+            if force_trigger or (should_start and not skip_trigger):
+                slot.link_type, slot.build_id = self._create_build(slot.params_id)
+
 
     def _update_commits_infos(self, base_head_per_repo):
         for link_commit in self.commit_link_ids:

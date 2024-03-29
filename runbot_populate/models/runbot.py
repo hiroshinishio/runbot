@@ -115,8 +115,7 @@ class Runbot(models.AbstractModel):
 
                 mock_git.side_effect = git
                 with mute_logger('odoo.addons.runbot.models.batch'):
-                    batch._prepare()
-                
+                    batch._process()
                 if i != nb_batch - 1:
                     for slot in batch.slot_ids:
                         if slot.build_id:

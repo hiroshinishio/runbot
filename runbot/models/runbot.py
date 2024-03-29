@@ -139,7 +139,7 @@ class Runbot(models.AbstractModel):
             non_allocated_domain = expression.AND([non_allocated_domain, domain])
         e = expression.expression(non_allocated_domain, self.env['runbot.build'])
         query = e.query
-        query.order = '"runbot_build".parent_path'
+        query.order = 'runbot_build.create_batch_id'
         select_query, select_params = query.select()
         # self-assign to be sure that another runbot batch cannot self assign the same builds
         query = """UPDATE

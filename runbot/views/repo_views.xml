@@ -33,6 +33,20 @@
                 <group string="Dependencies">
                   <field name="dependency_ids" nolabel="1" colspan="2"/>
                 </group>
+                <group string="Starts after" invisible="manual" colspan="2">
+                  <field 
+                      name="starts_after_ids"
+                      domain="[('category_id', '=', category_id), ('manual', '=', False), ('project_id', '=', project_id), ('id', '!=', id), ('id', 'not in', starts_before_ids)]"
+                      widget="many2many_tags">
+                  </field>
+                </group>
+                <group string="Starts before" invisible="manual" colspan="2">
+                  <field 
+                      name="starts_before_ids"
+                      domain="[('category_id', '=', category_id), ('manual', '=', False), ('project_id', '=', project_id), ('id', '!=', id), ('id', 'not in', starts_after_ids)]"
+                      widget="many2many_tags">
+                  </field>
+                </group>
                 <group string="Module filters">
                   <field name="module_filters" nolabel="1" colspan="4">
                     <tree string="Module filters" editable="bottom">
@@ -85,12 +99,40 @@
                 <field name="ci_context"/>
                 <field name="repo_ids" widget="many2many_tags"/>
                 <field name="dependency_ids" widget="many2many_tags"/>
+                <field name="starts_after_ids" widget="many2many_tags"/>
                 <field name="manual"/>
             </tree>
         </field>
       </record>
+    
+      <record id="repo_trigger_dependency_form" model="ir.ui.view">
+        <field name="name">runbot.trigger.dependency.form</field>
+        <field name="model">runbot.trigger.dependency</field>
+        <field name="arch" type="xml">
+          <form>
+            <sheet>
+              <group>
+                <field name="dependency_id"/>
+                <field name="dependant_id"/>
+              </group>
+            </sheet>
+          </form>
+        </field>
+      </record>
 
-      <record id="repo_trigger_catgory_form" model="ir.ui.view">
+      <record id="repo_trigger_dependency_tree" model="ir.ui.view">
+        <field name="name">runbot.trigger.dependency.tree</field>
+        <field name="model">runbot.trigger.dependency</field>
+        <field name="arch" type="xml">
+          <tree>
+            <field name="dependency_id"/>
+            <field name="dependant_id"/>
+          </tree>
+        </field>
+      </record>
+
+
+      <record id="repo_trigger_category_form" model="ir.ui.view">
         <field name="name">runbot.category.form</field>
         <field name="model">runbot.category</field>
         <field name="arch" type="xml">
@@ -224,10 +266,17 @@
     </record>
 
     <record id="runbot_triggers_action" model="ir.actions.act_window">
-        <field name="name">Triggers</field>
-        <field name="res_model">runbot.trigger</field>
-        <field name="view_mode">tree,form</field>
-    </record>
+      <field name="name">Triggers</field>
+      <field name="res_model">runbot.trigger</field>
+      <field name="view_mode">tree,form</field>
+  </record>
+
+  <record id="runbot_triggers_dependency_action" model="ir.actions.act_window">
+      <field name="name">Triggers dependency</field>
+      <field name="res_model">runbot.trigger.dependency</field>
+      <field name="view_mode">tree,form</field>
+  </record>
+
     <record id="runbot_remotes_action" model="ir.actions.act_window">
         <field name="name">Remotes</field>
         <field name="res_model">runbot.remote</field>

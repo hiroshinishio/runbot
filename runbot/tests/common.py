@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import datetime
 import time
+from odoo import fields
 from odoo.tests.common import TransactionCase
 from unittest.mock import patch, DEFAULT
 
@@ -249,7 +250,8 @@ class RunbotCase(TransactionCase):
         self.assertEqual(triggers.repo_ids + triggers.dependency_ids, self.remote_addons.repo_id + self.remote_server.repo_id)
 
         batch = self.branch_addons.bundle_id._force()
-        batch._prepare()
+        batch.last_update = fields.Datetime.now() - datetime.timedelta(seconds=60)
+        batch._process()
 
 
 class RunbotCaseMinimalSetup(RunbotCase):

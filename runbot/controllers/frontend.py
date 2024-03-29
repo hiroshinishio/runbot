@@ -232,6 +232,7 @@ class Runbot(Controller):
         batch = bundle.sudo()._force()
         batch._log('Batch forced by %s', request.env.user.name)
         batch._prepare(auto_rebase)
+        batch._process()
         return werkzeug.utils.redirect('/runbot/batch/%s' % batch.id)
 
     @route(['/runbot/batch/<int:batch_id>'], website=True, auth='public', type='http', sitemap=False)

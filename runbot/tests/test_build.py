@@ -90,7 +90,8 @@ class TestBuildParams(RunbotCaseMinimalSetup):
 
         # prepare last_batch
         bundle = self.env['runbot.bundle'].search([('name', '=', branch_a_name), ('project_id', '=', self.project.id)])
-        bundle.last_batch._prepare()
+        bundle.last_batch.last_update = fields.Datetime.now() - datetime.timedelta(seconds=60)
+        bundle.last_batch._process()
         build_slot = bundle.last_batch.slot_ids.filtered(lambda rec: rec.trigger_id == self.trigger_server)
         self.assertEqual(build_slot.build_id.params_id.config_id, self.trigger_server.config_id)
         self.assertEqual(build_slot.build_id.description, expected_description, "A build description should reflect the trigger description")
@@ -118,10 +119,67 @@ class TestBuildParams(RunbotCaseMinimalSetup):
             'bundle_id': bundle.id,
             'config_id': custom_config.id
         })
-
-        bundle.last_batch._prepare()
+        bundle.last_batch.last_update = fields.Datetime.now() - datetime.timedelta(seconds=60)
+        bundle.last_batch._process()
         build_slot = bundle.last_batch.slot_ids.filtered(lambda rec: rec.trigger_id == self.trigger_server)
         self.assertEqual(build_slot.build_id.params_id.config_id, custom_config)
+
+    def test_trigger_dependency(self):
+        self.start_patchers()
+        self.additionnal_setup()
+        self.assertEqual(self.project.trigger_ids, self.trigger_server | self.trigger_addons)
+        minimal_config = self.env['runbot.build.config'].create({'name': 'Minimal Check'})
+        other_triggers = self.project.trigger_ids
+        self.assertEqual(other_triggers.mapped('name'), ['Server trigger', 'Addons trigger'])
+        trigger_minimal_check = self.Trigger.create({
+            'sequence': 0,
+            'name': 'minimal_check',
+            'repo_ids': [(4, self.repo_addons.id), (4, self.repo_server.id)],
+            'config_id': minimal_config.id,
+            'project_id': self.project.id,
+            'starts_before_ids': other_triggers.ids,
+        })
+        self.assertEqual(self.trigger_server.starts_after_ids, trigger_minimal_check)
+        self.assertEqual(self.trigger_addons.starts_after_ids, trigger_minimal_check)
+
+        branch_a_name = 'master-test-something'
+        self.push_commit(self.remote_server_dev, branch_a_name, 'nice subject', sha='d0d0caca')
+        self.repo_server._update_batches()
+        bundle = self.Bundle.search([('name', '=', branch_a_name), ('project_id', '=', self.project.id)])
+        batch = bundle.last_batch
+        batch.last_update = fields.Datetime.now() - datetime.timedelta(seconds=60)
+        batch._process()
+        self.assertEqual(batch.slot_ids.mapped('trigger_id.name'), ['minimal_check', 'Server trigger', 'Addons trigger'], 'All three slot should have been created')
+        minimal_check_build = batch.slot_ids.build_id
+        self.assertEqual(len(minimal_check_build), 1, 'Only minimal check should have started')
+        self.assertEqual(minimal_check_build.trigger_id.name, 'minimal_check', 'Only minimal check should have started')
+
+        with self.env.cr.savepoint() as sp:
+            minimal_check_build.local_result = 'ko'
+            minimal_check_build.local_state = 'done'
+            batch._process()
+            all_builds = batch.slot_ids.build_id
+            self.assertEqual(len(all_builds), 1, 'Only minimal check should have started')
+            self.assertEqual(batch.state, 'done')
+            sp.rollback()
+
+        minimal_check_build.local_result = 'ok'
+        minimal_check_build.local_state = 'done'
+        batch._process()
+        all_builds = batch.slot_ids.build_id
+
+        self.assertEqual(
+            all_builds.trigger_id.mapped('name'),
+            ['minimal_check', 'Server trigger'],
+            'Other builds should have started (server only since addons was not updated)',
+        )
+        self.assertEqual(batch.state, 'ready')
+        self.assertEqual(all_builds.mapped('local_state'), ['done', 'pending'])
+        server_builds = all_builds[1]
+        server_builds.local_result = 'ok'
+        server_builds.local_state = 'done'
+        batch._process()
+        self.assertEqual(batch.state, 'done')
 
 
 class TestBuildResult(RunbotCase):
@@ -558,11 +616,14 @@ class TestGc(RunbotCaseMinimalSetup):
 
         # prepare last_batch
         bundle_a = self.env['runbot.bundle'].search([('name', '=', branch_a_name)])
-        bundle_a.last_batch._prepare()
+        bundle_a.last_batch.last_update = fields.Datetime.now() - datetime.timedelta(seconds=60)
+        bundle_a.last_batch._process()
 
         # now we should have a build in pending state in the bundle
         self.assertEqual(len(bundle_a.last_batch.slot_ids), 2)
         build_a = bundle_a.last_batch.slot_ids[0].build_id
+        self.assertEqual(build_a.local_state, 'pending')
+        self.assertEqual(build_a.local_state, 'pending')
         self.assertEqual(build_a.global_state, 'pending')
 
         # now another commit is found in another branch
@@ -570,7 +631,9 @@ class TestGc(RunbotCaseMinimalSetup):
         self.push_commit(self.remote_server_dev, branch_b_name, 'other subject', sha='cacad0d0')
         self.repo_server._update_batches()
         bundle_b = self.env['runbot.bundle'].search([('name', '=', branch_b_name)])
-        bundle_b.last_batch._prepare()
+        bundle_b.last_batch.last_update = fields.Datetime.now() - datetime.timedelta(seconds=60)
+        bundle_b.last_batch._process()
+
 
         build_b = bundle_b.last_batch.slot_ids[0].build_id
 
@@ -588,7 +651,8 @@ class TestGc(RunbotCaseMinimalSetup):
         self.push_commit(self.remote_server_dev, branch_a_name, 'new subject', sha='d0cad0ca')
         self.repo_server._update_batches()
         bundle_a = self.env['runbot.bundle'].search([('name', '=', branch_a_name)])
-        bundle_a.last_batch._prepare()
+        bundle_a.last_batch.last_update = fields.Datetime.now() - datetime.timedelta(seconds=60)
+        bundle_a.last_batch._process()
         build_a_last = bundle_a.last_batch.slot_ids[0].build_id
         self.assertEqual(build_a_last.local_state, 'pending')
         self.assertTrue(build_a.killable, 'The previous build in the batch should be killable')

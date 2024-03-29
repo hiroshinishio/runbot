@@ -1,12 +1,16 @@
 # -*- coding: utf-8 -*-
+import datetime
+import logging
+import time
 import re
+
 from unittest import skip
 from unittest.mock import patch, Mock
 from subprocess import CalledProcessError
+
+from odoo import fields
 from odoo.tests import common, TransactionCase
 from odoo.tools import mute_logger
-import logging
-import time
 
 from .common import RunbotCase, RunbotCaseMinimalSetup
 
@@ -248,7 +252,8 @@ class TestRepo(RunbotCaseMinimalSetup):
             return {}
 
         self.patchers['github_patcher'].side_effect = github2
-        last_batch._prepare()
+        bundle.last_batch.last_update = fields.Datetime.now() - datetime.timedelta(seconds=60)
+        bundle.last_batch._process()
         self.assertEqual(last_batch.commit_link_ids.commit_id.mapped('subject'), ['Server subject', 'Addons subject'])
 
         self.assertEqual(last_batch.state, 'ready')

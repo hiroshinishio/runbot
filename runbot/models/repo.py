@@ -29,6 +29,13 @@ class ModuleFilter(models.Model):
     description = fields.Char(string="Description")
 
 
+class TriggerDependency(models.Model):
+    _name = 'runbot.trigger.dependency'
+    _description = 'Trigger Dependency'
+
+    dependency_id = fields.Many2one('runbot.trigger', string="Dependency", required=True)
+    dependant_id = fields.Many2one('runbot.trigger', string="Dependant", required=True)
+
 class Trigger(models.Model):
     """
     List of repo parts that must be part of the same bundle
@@ -46,6 +53,21 @@ class Trigger(models.Model):
     project_id = fields.Many2one('runbot.project', string="Project id", required=True)
     repo_ids = fields.Many2many('runbot.repo', relation='runbot_trigger_triggers', string="Triggers", domain="[('project_id', '=', project_id)]")
     dependency_ids = fields.Many2many('runbot.repo', relation='runbot_trigger_dependencies', string="Dependencies")
+
+    starts_before_ids = fields.Many2many(
+        'runbot.trigger',
+        string="Start before",
+        relation='runbot_trigger_dependency',
+        column1='dependency_id',
+        column2='dependant_id',
+    )
+    starts_after_ids = fields.Many2many(
+        'runbot.trigger',
+        string="Start after",
+        relation='runbot_trigger_dependency',
+        column2='dependency_id',
+        column1='dependant_id',
+    )
     module_filters = fields.One2many('runbot.module.filter', 'trigger_id', string="Module filters", help='Will be combined with repo module filters when used with this trigger')
     config_id = fields.Many2one('runbot.build.config', string="Config", required=True)
     batch_dependent = fields.Boolean('Batch Dependent', help="Force adding batch in build parameters to make it unique and give access to bundle")

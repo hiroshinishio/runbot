@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
+import datetime
 from unittest.mock import patch, mock_open
-from odoo import Command
+from odoo import Command, fields
 from odoo.tools import mute_logger
 from odoo.exceptions import UserError
 from odoo.addons.runbot.common import RunbotException
@@ -219,7 +220,8 @@ class TestBuildConfigStepRestore(TestBuildConfigStepCommon):
         # setup master branch
         master_batch = self.master_bundle._force()
         with mute_logger('odoo.addons.runbot.models.batch'):
-            master_batch._prepare()
+            master_batch.last_update = fields.Datetime.now() - datetime.timedelta(seconds=60)
+            master_batch._process()
         reference_slot = master_batch.slot_ids
         trigger = reference_slot.trigger_id
         self.assertEqual(trigger.name, 'Server trigger', 'Just checking that we have a single slot')
@@ -246,7 +248,8 @@ class TestBuildConfigStepRestore(TestBuildConfigStepCommon):
         # create dev build
         dev_batch = self.dev_bundle._force()
         with mute_logger('odoo.addons.runbot.models.batch'):
-            dev_batch._prepare()
+            dev_batch.last_update = fields.Datetime.now() - datetime.timedelta(seconds=60)
+            dev_batch._process()
         dev_batch.base_reference_batch_id = master_batch  # not tested, this is not the purpose of this test
         dev_build = dev_batch.slot_ids.build_id
         self.assertEqual(dev_build.params_id.config_data, config_data)
