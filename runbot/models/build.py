@@ -744,7 +744,7 @@ class BuildResult(models.Model):
                 if docker_time < 5:
                     return False
                 elif docker_time < 60:
-                    _logger.info('container "%s" seems too take a while to start :%s' % (build.job_time, build._get_docker_name()))
+                    _logger.info('container "%s" seems too take a while to start :%s' % (build._get_docker_name(), build.job_time))
                     return False
                 else:
                     build._log('_schedule', 'Docker with state %s not started after 60 seconds, skipping' % _docker_state, level='ERROR')
@@ -873,11 +873,18 @@ class BuildResult(models.Model):
         ro_volumes[f'/home/{user}/.odoorc'] = self._path('.odoorc')
         kwargs.pop('build_dir', False)
         kwargs.pop('log_path', False)
+        kwargs.pop('container_name', False)
         log_path = self._path('logs', '%s.txt' % step.name)
         build_dir = self._path()
+        container_name = self._get_docker_name()
         self.env.flush_all()
         def start_docker():
-            docker_run(cmd=cmd, build_dir=build_dir, log_path=log_path, ro_volumes=ro_volumes, **kwargs)
+            docker_run(
+                cmd=cmd,
+                container_name=container_name,
+                build_dir=build_dir,
+                log_path=log_path,
+                ro_volumes=ro_volumes, **kwargs)
         return start_docker
 
     def _path(self, *paths):

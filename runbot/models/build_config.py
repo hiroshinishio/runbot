@@ -392,14 +392,13 @@ class ConfigStep(models.Model):
             cmd.extend(shlex.split(extra_params))
         env_variables = self.additionnal_env.split(';') if self.additionnal_env else []
 
-        docker_name = build._get_docker_name()
         build_port = build.port
         try:
             self.env['runbot.runbot']._reload_nginx()
         except Exception:
             _logger.exception('An error occured while reloading nginx')
             build._log('', "An error occured while reloading nginx, skipping")
-        return dict(cmd=cmd, container_name=docker_name, exposed_ports=[build_port, build_port + 1], ro_volumes=exports, env_variables=env_variables, cpu_limit=None)
+        return dict(cmd=cmd, exposed_ports=[build_port, build_port + 1], ro_volumes=exports, env_variables=env_variables, cpu_limit=None)
 
     def _run_install_odoo(self, build):
         exports = build._checkout()
@@ -485,7 +484,7 @@ class ConfigStep(models.Model):
             cmd.finals.append(['flamegraph.pl', '--title', 'Flamegraph %s for build %s' % (self.name, build.id), self._perfs_data_path(), '>', self._perfs_data_path(ext='svg')])
             cmd.finals.append(['gzip', '-f', self._perfs_data_path()])  # keep data but gz them to save disc space
         env_variables = self.additionnal_env.split(';') if self.additionnal_env else []
-        return dict(cmd=cmd, container_name=build._get_docker_name(), ro_volumes=exports, env_variables=env_variables)
+        return dict(cmd=cmd, ro_volumes=exports, env_variables=env_variables)
 
     def _upgrade_create_childs(self):
         pass
@@ -728,7 +727,7 @@ class ConfigStep(models.Model):
         exception_env = self.env['runbot.upgrade.exception']._generate()
         if exception_env:
             env_variables.append(exception_env)
-        return dict(cmd=migrate_cmd, container_name=build._get_docker_name(), ro_volumes=exports, env_variables=env_variables, image_tag=target.params_id.dockerfile_id.image_tag)
+        return dict(cmd=migrate_cmd, ro_volumes=exports, env_variables=env_variables, image_tag=target.params_id.dockerfile_id.image_tag)
 
     def _run_restore(self, build):
         # exports = build._checkout()
@@ -788,7 +787,7 @@ class ConfigStep(models.Model):
 
             ])
 
-        return dict(cmd=cmd, container_name=build._get_docker_name())
+        return dict(cmd=cmd)
 
     def _reference_builds(self, bundle, trigger):
         upgrade_dumps_trigger_id = trigger.upgrade_dumps_trigger_id
