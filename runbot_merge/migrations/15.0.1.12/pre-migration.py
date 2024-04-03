@@ -76,7 +76,11 @@ def migrate(cr, version):
     # avoid SQL taking absolutely ungodly amounts of time
     cr.execute("SET statement_timeout = '60s'")
     # will be recreated & computed on the fly
-    cr.execute("ALTER TABLE runbot_merge_batch DROP COLUMN target")
+    cr.execute("""
+    ALTER TABLE runbot_merge_batch
+        DROP COLUMN target,
+        DROP COLUMN active
+    """)
 
     cleanup(cr)
 

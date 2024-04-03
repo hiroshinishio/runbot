@@ -1085,6 +1085,7 @@ def test_maintain_batch_history(env, config, make_repo, users):
     assert pr1_c_id.batch_id.parent_id == pr1_b_id.batch_id
     assert pr1_b_id.batch_id.parent_id == pr1_a_id.batch_id
     b_batch = pr1_b_id.batch_id
+    assert b_batch
     # endregion
 
     pr1_b = repo.get_pr(pr1_b_id.number)
@@ -1094,10 +1095,11 @@ def test_maintain_batch_history(env, config, make_repo, users):
     assert pr1_b_id.state == 'closed'
 
     # region check that all the batches are *still* set up correctly
-    assert pr1_a_id.batch_id
-    assert not pr1_b_id.batch_id, "the PR still gets detached from the batch"
-    assert b_batch.exists(), "the batch is not deleted tho"
-    assert pr1_c_id.batch_id
+    assert b_batch.exists()
+    assert pr1_a_id.batch_id == b_batch.parent_id
+    assert pr1_b_id.batch_id == b_batch
     assert pr1_c_id.batch_id.parent_id == b_batch
-    assert b_batch.parent_id == pr1_a_id.batch_id
+
+    assert pr1_b_id in b_batch.all_prs, "the PR is still in the batch"
+    assert pr1_b_id not in b_batch.prs, "the PR is not in the open/active batch PRs"
     # endregion

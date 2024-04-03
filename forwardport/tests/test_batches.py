@@ -1,7 +1,5 @@
 import re
 
-import pytest
-
 from utils import Commit, make_basic, to_pr, seen, re_matches
 
 
@@ -133,6 +131,25 @@ def test_closing_during_fp(env, config, make_repo, users):
         "only one of the forward ports should be ported"
     assert not env['runbot_merge.pull_requests'].search([('parent_id', '=', pr1_1_id.id)]),\
         "the closed PR should not be ported"
+    assert env['runbot_merge.pull_requests'].search([('source_id', '=', pr1_id.id)]) == pr1_1_id,\
+        "the closed PR should not be ported"
+
+    r1_b_head = r1.commit("b")
+    with r2:
+        r2.get_pr(pr2_1_id.number).post_comment('hansen r+', config['role_reviewer']['token'])
+    env.run_crons()
+    assert not pr2_1_id.blocked
+    assert not pr2_1_id.batch_id.blocked
+    st = pr2_1_id.staging_id
+    assert st
+    with r1, r2:
+        r1.post_status('staging.b', 'success')
+        r2.post_status('staging.b', 'success')
+    env.run_crons()
+    assert st.state == 'success'
+
+    assert r1_b_head.id == r1.commit("b").id, \
+        "r1:b's head should not have been touched"
 
 def test_add_pr_during_fp(env, config, make_repo, users):
     """ It should be possible to add new PRs to an FP batch

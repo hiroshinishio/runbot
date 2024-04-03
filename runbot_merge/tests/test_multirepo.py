@@ -811,14 +811,40 @@ class TestBlocked:
             repo_a.make_commits(None, Commit('initial', tree={'a0': 'a'}), ref='heads/master')
             repo_b.make_commits(None, Commit('initial', tree={'b0': 'b'}), ref='heads/master')
 
-            pr = make_pr(repo_a, 'xxx', [{'a1': 'a'}], user=config['role_user']['token'], reviewer=config['role_reviewer']['token'],)
-            b = make_pr(repo_b, 'xxx', [{'b1': 'b'}], user=config['role_user']['token'], reviewer=config['role_reviewer']['token'], statuses=[])
+            pr1_a = make_pr(repo_a, 'xxx', [{'a1': 'a'}], user=config['role_user']['token'], reviewer=config['role_reviewer']['token'],)
+            pr1_b = make_pr(repo_b, 'xxx', [{'b1': 'b'}], user=config['role_user']['token'], reviewer=config['role_reviewer']['token'], statuses=[])
         env.run_crons()
 
-        p = to_pr(env, pr)
-        assert p.blocked
-        with repo_b: b.close()
-        assert not p.blocked
+        head_a = repo_a.commit('master').id
+        head_b = repo_b.commit('master').id
+        pr1_a_id = to_pr(env, pr1_a)
+        pr1_b_id = to_pr(env, pr1_b)
+        assert pr1_a_id.blocked
+        with repo_b: pr1_b.close()
+        assert not pr1_a_id.blocked
+        assert len(pr1_a_id.batch_id.all_prs) == 2
+        assert pr1_a_id.state == 'ready'
+        assert pr1_b_id.state == 'closed'
+        env.run_crons()
+        assert pr1_a_id.staging_id
+        with repo_a, repo_b:
+            repo_a.post_status('staging.master', 'success')
+            repo_b.post_status('staging.master', 'success')
+        env.run_crons()
+        assert pr1_a_id.state == 'merged'
+        assert pr1_a_id.batch_id.merge_date
+        assert repo_a.commit('master').id != head_a, \
+            "the master of repo A should be updated"
+        assert repo_b.commit('master').id == head_b, \
+            "the master of repo B should not be updated"
+
+        with repo_a:
+            pr2_a = make_pr(repo_a, "xxx", [{'x': 'x'}], user=config['role_user']['token'], reviewer=config['role_reviewer']['token'])
+        env.run_crons()
+        pr2_a_id = to_pr(env, pr2_a)
+        assert pr2_a_id.batch_id != pr1_a_id.batch_id
+        assert pr2_a_id.label == pr1_a_id.label
+        assert len(pr2_a_id.batch_id.all_prs) == 1
 
     def test_linked_merged(self, env, repo_a, repo_b, config):
         with repo_a, repo_b:

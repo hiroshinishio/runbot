@@ -62,7 +62,9 @@ class Batch(models.Model):
     )
     split_id = fields.Many2one('runbot_merge.split', index=True)
 
-    prs = fields.One2many('runbot_merge.pull_requests', 'batch_id')
+    all_prs = fields.One2many('runbot_merge.pull_requests', 'batch_id')
+    prs = fields.One2many('runbot_merge.pull_requests', compute='_compute_open_prs', search='_search_open_prs')
+    active = fields.Boolean(compute='_compute_active', store=True, help="closed batches (batches containing only closed PRs)")
 
     fw_policy = fields.Selection([
         ('default', "Default"),
@@ -121,14 +123,20 @@ class Batch(models.Model):
         else:
             pattern = self.parent_path + '_%'
 
-        return self.search([("parent_path", '=like', pattern)], order="parent_path")
+        act = self.env.context.get('active_test', True)
+        return self\
+            .with_context(active_test=False)\
+            .search([("parent_path", '=like', pattern)], order="parent_path")\
+            .with_context(active_test=act)
 
     # also depends on all the descendants of the source or sth
     @api.depends('parent_path')
     def _compute_genealogy(self):
         for batch in self:
             sid = next(iter(batch.parent_path.split('/', 1)))
-            batch.genealogy_ids = self.search([("parent_path", "=like", f"{sid}/%")], order="parent_path")
+            batch.genealogy_ids = self \
+                .with_context(active_test=False)\
+                .search([("parent_path", "=like", f"{sid}/%")], order="parent_path")\
 
     def _auto_init(self):
         for field in self._fields.values():
@@ -155,15 +163,28 @@ class Batch(models.Model):
         WHERE parent_id IS NOT NULL;
         """)
 
-    @api.depends("prs.target")
+    @api.depends('all_prs.closed')
+    def _compute_active(self):
+        for b in self:
+            b.active = not all(p.closed for p in b.all_prs)
+
+    @api.depends('all_prs.closed')
+    def _compute_open_prs(self):
+        for b in self:
+            b.prs = b.all_prs.filtered(lambda p: not p.closed)
+
+    def _search_open_prs(self, operator, value):
+        return [('all_prs', operator, value), ('active', '=', True)]
+
+    @api.depends("all_prs.target")
     def _compute_target(self):
         for batch in self:
             if len(batch.prs) == 1:
-                batch.target = batch.prs.target
+                batch.target = batch.all_prs.target
             else:
-                targets = set(batch.prs.mapped('target'))
+                targets = set(batch.all_prs.mapped('target'))
                 if not targets:
-                    targets = set(batch.prs.mapped('target'))
+                    targets = set(batch.all_prs.mapped('target'))
                 if len(targets) == 1:
                     batch.target = targets.pop()
                 else:
@@ -180,6 +201,8 @@ class Batch(models.Model):
         for batch in self:
             if batch.merge_date:
                 batch.blocked = "Merged."
+            elif not batch.active:
+                batch.blocked = "all prs are closed"
             elif blocking := batch.prs.filtered(
                 lambda p: p.error or p.draft or not (p.squash or p.merge_method)
             ):

@@ -563,11 +563,6 @@ class PullRequests(models.Model):
             return json.loads(self.overrides)
         return {}
 
-    @api.depends('batch_ids.active')
-    def _compute_active_batch(self):
-        for r in self:
-            r.batch_id = r.batch_ids.filtered(lambda b: b.active)[:1]
-
     def _get_or_schedule(self, repo_name, number, *, target=None, closing=False):
         repo = self.env['runbot_merge.repository'].search([('name', '=', repo_name)])
         if not repo:
@@ -1255,9 +1250,7 @@ class PullRequests(models.Model):
         match vals.get('closed'):
             case True if not self.closed:
                 vals['reviewed_by'] = False
-                vals['batch_id'] = False
-                self.env.cr.precommit.add(self.batch_id.unlink)
-            case False if self.closed:
+            case False if self.closed and not self.batch_id:
                 vals['batch_id'] = self._get_batch(
                     target=vals.get('target') or self.target.id,
                     label=vals.get('label') or self.label,
@@ -1382,8 +1375,7 @@ class PullRequests(models.Model):
             return False
 
         self.unstage("closed by %s", by)
-        # `write` automatically unsets reviewer & batch when closing but...
-        self.write({'closed': True, 'reviewed_by': False, 'batch_id': False})
+        self.write({'closed': True, 'reviewed_by': False})
 
         return True
 
@@ -1764,7 +1756,12 @@ class Stagings(models.Model):
     target = fields.Many2one('runbot_merge.branch', required=True, index=True)
 
     staging_batch_ids = fields.One2many('runbot_merge.staging.batch', 'runbot_merge_stagings_id')
-    batch_ids = fields.Many2many('runbot_merge.batch', context={'active_test': False}, compute="_compute_batch_ids")
+    batch_ids = fields.Many2many(
+        'runbot_merge.batch',
+        context={'active_test': False},
+        compute="_compute_batch_ids",
+        search="_search_batch_ids",
+    )
     pr_ids = fields.One2many('runbot_merge.pull_requests', compute='_compute_prs')
     state = fields.Selection([
         ('success', 'Success'),
@@ -1819,6 +1816,9 @@ class Stagings(models.Model):
     def _compute_batch_ids(self):
         for staging in self:
             staging.batch_ids = staging.staging_batch_ids.runbot_merge_batch_id
+
+    def _search_batch_ids(self, operator, value):
+        return [('staging_batch_ids.runbot_merge_batch_id', operator, value)]
 
     @api.depends('heads')
     def _compute_statuses(self):
