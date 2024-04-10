@@ -30,6 +30,26 @@
                             </div>
                             <div>
                                 <table class="table table-condensed table-responsive table-stripped">
+                                    <tr groups="base.group_user" t-if="not bundle.sticky and not bundle.is_base">
+                                        <t t-if="bundle.no_build">
+                                            <td class="text-danger">Build disabled</td>
+                                            <td>
+                                                <a class="btn btn-primary btn-ssm"
+                                                   t-attf-href="/runbot/bundle/toogle_no_build/{{bundle.id}}/0">
+                                                Enable builds
+                                                </a>
+                                            </td>
+                                        </t>
+                                        <t t-else="">
+                                            <td>Build enabled</td>
+                                            <td>
+                                                <a class="btn btn-secondary btn-ssm"
+                                                   t-attf-href="/runbot/bundle/toogle_no_build/{{bundle.id}}/1">
+                                                Disable builds
+                                                </a>
+                                            </td>
+                                        </t>
+                                    </tr>
                                     <tr>
                                         <td>Version</td>
                                         <td>

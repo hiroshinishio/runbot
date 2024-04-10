@@ -127,7 +127,9 @@ class Runbot(Controller):
             'hosts_data': request.env['runbot.host'].search([('assigned_only', '=', False)]),
         }
         if project:
-            domain = [('last_batch', '!=', False), ('project_id', '=', project.id), ('no_build', '=', False)]
+            domain = [('last_batch', '!=', False), ('project_id', '=', project.id)]
+            if not search:
+                domain.append(('no_build', '=', False))
 
             if has_pr is not None:
                 domain.append(('has_pr', '=', bool(has_pr)))
@@ -641,3 +643,16 @@ class Runbot(Controller):
     def parse_log(self, ir_log, **kwargs):
         request.env['runbot.build.error']._parse_logs(ir_log)
         return werkzeug.utils.redirect('/runbot/build/%s' % ir_log.build_id.id)
+
+    @route(['/runbot/bundle/toogle_no_build/<int:bundle_id>/<int:value>'], type='http', auth='user', sitemap=False)
+    def toogle_no_build(self, bundle_id, value, **kwargs):
+        if not request.env.user.has_group('base.group_user'):
+            return 'Forbidden'
+        bundle = request.env['runbot.bundle'].browse(bundle_id).exists()
+        if bundle.sticky or bundle.is_base:
+            return 'Forbidden'
+        if bundle.project_id.tmp_prefix and bundle.name.startswith(bundle.project_id.tmp_prefix):
+            return 'Forbidden'
+        bundle.sudo().no_build = bool(value)
+        _logger.info('Bundle %s no_build set to %s by %s', bundle.name, bool(value), request.env.user.name)
+        return werkzeug.utils.redirect(f'/runbot/bundle/{bundle_id}')
