@@ -35,6 +35,15 @@
                                 <span class="badge badge-info" t-esc="s2human(batch.last_update - batch.create_date)"/>
                             </td>
                         </tr>
+                    </td>
+
+                        <tr t-if="more and batch.reference_batch_ids">
+                            <td>Version reference batches (for upgrade)</td>
+                            <td>
+                                <t t-foreach="batch.reference_batch_ids" t-as="reference_batch"/>
+                                <div><a t-attf-href="/runbot/batch/{{reference_batch.id}}"><t t-esc="reference_batch.bundle_id.version_id.name"/> (<t t-esc="reference_batch.id"/>)</a></div>
+                            </td>
+                        </tr>
                         <tr t-att-class="'bg-info-light' if batch.state=='preparing' else 'bg-success-light' if not any(log.level != 'INFO' for log in batch.log_ids) else 'bg-warning-light'">
                             <td>Commits</td>
                             <td>

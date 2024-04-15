@@ -504,7 +504,7 @@ class Repo(models.Model):
         if not self.get_ref_time or get_ref_time > self.get_ref_time:
             try:
                 self._set_ref_time(get_ref_time)
-                fields = ['refname', 'objectname', 'committerdate:unix', 'authorname', 'authoremail', 'subject', 'committername', 'committeremail']
+                fields = ['refname', 'objectname', 'committerdate:unix', 'authorname', 'authoremail', 'subject', 'committername', 'committeremail', 'tree']
                 fmt = "%00".join(["%(" + field + ")" for field in fields])
                 cmd = ['for-each-ref', '--format', fmt, '--sort=-committerdate', 'refs/*/heads/*']
                 if any(remote.fetch_pull for remote in self.remote_ids):
@@ -537,7 +537,7 @@ class Repo(models.Model):
         branches = self.env['runbot.branch'].search([('name', 'in', names), ('remote_id', 'in', self.remote_ids.ids)])
         ref_branches = {branch._ref(): branch for branch in branches}
         new_branch_values = []
-        for ref_name, sha, date, author, author_email, subject, committer, committer_email in refs:
+        for ref_name, *_unused in refs:
             if not ref_branches.get(ref_name):
                 # format example:
                 # refs/ruodoo-dev/heads/12.0-must-fail
@@ -565,7 +565,7 @@ class Repo(models.Model):
         """
         self.ensure_one()
 
-        for ref_name, sha, date, author, author_email, subject, committer, committer_email in refs:
+        for ref_name, sha, date, author, author_email, subject, committer, committer_email, tree_hash in refs:
             branch = ref_branches[ref_name]
             if branch.head_name != sha:  # new push on branch
                 _logger.info('repo %s branch %s new commit found: %s', self.name, branch.name, sha)
@@ -577,6 +577,7 @@ class Repo(models.Model):
                         'committer_email': committer_email,
                         'subject': subject,
                         'date': datetime.datetime.fromtimestamp(int(date)),
+                        'tree_hash': tree_hash,
                     })
                 branch.head = commit
                 if not branch.alive:
