@@ -12,9 +12,7 @@
 
                     <script src="/runbot/static/src/libs/jquery/jquery.js" type="text/javascript"/>
                     <script type="text/javascript" src="/runbot/static/src/libs/popper/popper.js"/>
-                    <script type="text/javascript" src="/runbot/static/src/libs/bootstrap/js/util.js"/>
-                    <script type="text/javascript" src="/runbot/static/src/libs/bootstrap/js/dropdown.js"/>
-                    <script type="text/javascript" src="/runbot/static/src/libs/bootstrap/js/collapse.js"/>
+                    <script type="text/javascript" src="/runbot/static/src/libs/bootstrap/js/bootstrap.bundle.js"/>
                     <script type="text/javascript" src="/runbot/static/src/js/runbot.js"/>
 
                     <t t-if="refresh">
@@ -38,7 +36,7 @@
                                     <t t-esc="project.name"/>
                                 </b>
                             </a>
-                            <button type="button" class="navbar-toggler" data-toggle="collapse" data-target="#top_menu_collapse">
+                            <button type="button" class="navbar-toggler" data-bs-toggle="collapse" data-bs-target="#top_menu_collapse">
                                 <span class="navbar-toggler-icon"/>
                             </button>
                             <div class="collapse navbar-collapse" id="top_menu_collapse">
@@ -54,62 +52,15 @@
                                     </t>
                                     <li class="nav-item divider"/>
                                     <li class="nav-item dropdown">
-                                        <a href="#" class="nav-link dropdown-toggle" data-toggle="dropdown">
+                                        <a data-bs-toggle="collapse" href="#collapsePreference" role="button" class="nav-link">
                                             <i class="fa fa-gear"/>
                                         </a>
-                                        <div class="dropdown-menu" role="menu">
-
-                                            <form class="px-4 py-3" method="post" action="/runbot/submit">
-                                                <div class="text-nowrap btn-group btn-group-sm" role="group">
-                                                    <button onclick="document.cookie = 'theme=legacy; expires=Thu, 1 Dec 2942 12:00:00 UTC; path=/'; location.reload();" type="button" class="btn btn-primary">Legacy</button>
-                                                    <button onclick="document.cookie = 'theme=dark; expires=Thu, 1 Dec 2942 12:00:00 UTC; path=/'; location.reload();" type="button" class="btn btn-dark">Dark</button>
-                                                    <button onclick="document.cookie = 'theme=light; expires=Thu, 1 Dec 2942 12:00:00 UTC; path=/'; location.reload();" type="button" class="btn btn-light">Ligh</button>
-                                                </div>
-                                                <input type="hidden" name="save" value="1"/>
-                                                <input type="hidden" name="redirect" t-att-value="current_path"/>
-                                                
-                                                <div class="text-nowrap">
-                                                    <input type="checkbox" name="more" id="more" t-att-checked="more"/>
-                                                    <label for="more">More info</label>
-                                                </div>
-                                                <div class="text-nowrap">
-                                                    <input type="checkbox" name="keep_search" id="keep_search" t-att-checked="keep_search"/>
-                                                    <label for="keep_search">Persistent search</label>
-                                                </div>
-                                                <hr class="separator"/>
-                                                <div class="text-nowrap">
-                                                    <label for="filter_mode">Filter</label>
-                                                    <select class="form-control" name="filter_mode" id="filter_mode">
-                                                        <option value="all" t-att-selected="filter_mode=='all'">All</option>
-                                                        <option value="sticky" t-att-selected="filter_mode=='sticky'">Sticky only</option>
-                                                        <option value="nosticky" t-att-selected="filter_mode=='nosticky'">Dev only</option>
-                                                    </select>
-                                                </div>
-                                                <div t-if="categories" class="text-nowrap">
-                                                    <label for="category">Category</label>
-                                                    <select class="form-control" name="category" id="category">
-                                                        <option t-foreach="categories" t-as="category" t-att-value="category.id" t-esc="category.name" t-att-selected="category.id==active_category_id"/>
-                                                    </select>
-                                                </div>
-                                                <hr class="separator"/>
-                                                <t t-if="triggers">
-                                                    <input type="hidden" name="update_triggers" t-att-value="project.id"/>
-                                                    <t t-foreach="triggers" t-as="trigger">
-                                                        <div class="text-nowrap">
-                                                            <input type="checkbox" t-attf-name="trigger_{{trigger.id}}" t-attf-id="trigger_{{trigger.id}}" t-att-checked="trigger_display is None or trigger.id in trigger_display"/>
-                                                            <label t-attf-for="trigger_{{trigger.id}}" t-esc="trigger.name"/>
-                                                        </div>
-                                                    </t>
-                                                </t>
-                                                <button type="submit" class="btn btn-primary">Save</button>
-                                            </form>
-                                        </div>
                                     </li>
                                     <li class="nav-item divider" t-ignore="true"/>
                                     <t t-if="not user_id._is_public()">
                                         <t t-call="runbot.build_errors_link"/>
                                         <li class="nav-item dropdown" t-ignore="true">
-                                            <a href="#" class="nav-link dropdown-toggle" data-toggle="dropdown">
+                                            <a href="#" class="nav-link dropdown-toggle" data-bs-toggle="dropdown">
                                                 <b>
                                                     <span t-esc="user_id.name[:23] + '...' if user_id.name and len(user_id.name) &gt; 25 else user_id.name"/>
                                                 </b>
@@ -138,6 +89,66 @@
                             </div>
                         </nav>
                     </header>
+                    <div id="collapsePreference" class="collapse">
+                        <form class="px-4 py-3" method="post" action="/runbot/submit" id="preferences_form">
+                            <input type="hidden" name="redirect" t-att-value="current_path"/>
+
+                            <hr class="separator"/>
+                            <div class="form-check form-switch">
+                                <input onclick="document.getElementById('preferences_form').submit()" class="form-check-input" type="checkbox" role="switch" id="more" name="more" t-att-checked="more"/>
+                                <label class="form-check-label" for="flexSwitchCheckDefault" >More info</label>
+                            </div>
+
+                            <hr class="separator"/>
+                            <div class="text-nowrap btn-group btn-group-sm" role="group">
+                                <button onclick="document.cookie = 'theme=legacy; expires=Thu, 1 Dec 2942 12:00:00 UTC; path=/'; location.reload();" type="button" t-attf-class="btn btn-{{'primary' if theme=='legacy' else 'secondary'}}">Legacy</button>
+                                <button onclick="document.cookie = 'theme=dark; expires=Thu, 1 Dec 2942 12:00:00 UTC; path=/'; location.reload();" type="button" t-attf-class="btn btn-{{'primary' if theme=='dark' else 'secondary'}}">Dark</button>
+                                <button onclick="document.cookie = 'theme=light; expires=Thu, 1 Dec 2942 12:00:00 UTC; path=/'; location.reload();" type="button" t-attf-class="btn btn-{{'primary' if theme=='light' else 'secondary'}}">Light</button>
+                            </div>
+
+                            <hr class="separator"/>
+                            <div class="text-nowrap btn-group btn-group-sm" role="group">
+                                <button onclick="document.cookie = 'filter_mode=all; expires=Thu, 1 Dec 2942 12:00:00 UTC; path=/'; location.reload();" type="button" t-attf-class="btn btn-{{'primary' if filter_mode=='all' else 'secondary'}}">All</button>
+                                <button onclick="document.cookie = 'filter_mode=sticky; expires=Thu, 1 Dec 2942 12:00:00 UTC; path=/'; location.reload();" type="button" t-attf-class="btn btn-{{'primary' if filter_mode=='sticky' else 'secondary'}}">Sticky only</button>
+                                <button onclick="document.cookie = 'filter_mode=nosticky; expires=Thu, 1 Dec 2942 12:00:00 UTC; path=/'; location.reload();" type="button" t-attf-class="btn btn-{{'primary' if filter_mode=='nosticky' else 'secondary'}}">Dev only</button>
+                            </div>
+
+                            <div class="text-nowrap btn-group btn-group-sm" role="group">
+                                <t t-foreach="categories" t-as="category">
+                                    <button t-attf-onclick="document.cookie = 'category={{category.id}}; expires=Thu, 1 Dec 2942 12:00:00 UTC; path=/'; location.reload();" type="button" t-attf-class="btn btn-{{'primary' if category.id == active_category_id else 'secondary'}}" t-esc="category.name"/>
+                                </t>
+                            </div>
+        
+                            <hr class="separator"/>
+                            <div t-if="triggers">
+                                <input type="hidden" name="update_triggers" t-att-value="project.id"/>
+                                <t t-foreach="categories" t-as="category">
+                                    <t t-set="category_triggers" t-value="triggers.filtered(lambda t: not t.manual and t.category_id == category)"/>
+                                    <t t-if="category_triggers">
+                                        <h3 t-esc="category.name"/>
+                                        <div class="row">
+                                            <t t-foreach="category_triggers" t-as="trigger">
+                                                <div class="col-md-3 text-nowrap">
+                                                    <input t-attf-class="trigger_selection {{'trigger_selection_hide' if trigger.hide else 'trigger_selection_show'}}" type="checkbox" t-attf-name="trigger_{{trigger.id}}" t-attf-id="trigger_{{trigger.id}}" t-att-checked="trigger_display is None or trigger.id in trigger_display"/>
+                                                    <label t-attf-for="trigger_{{trigger.id}}" t-esc="trigger.name"/>
+                                                </div>
+                                            </t>
+                                        </div>
+                                    </t>
+                                </t>
+                            </div>
+                            <button 
+                                onclick="Array.from(document.getElementsByClassName('trigger_selection_show')).forEach((element) => element.checked = true); Array.from(document.getElementsByClassName('trigger_selection_hide')).forEach((element) => element.checked = false); event.preventDefault();"
+                                class="btn btn-secondary">Reset to default</button>
+                            <button 
+                                onclick="Array.from(document.getElementsByClassName('trigger_selection')).forEach((element) => element.checked = true); event.preventDefault();"
+                                class="btn btn-secondary">All</button>
+                            <button 
+                                onclick="Array.from(document.getElementsByClassName('trigger_selection')).forEach((element) => element.checked = false); event.preventDefault();"
+                                class="btn btn-secondary">None</button>
+                            <button type="submit" class="btn btn-primary">Save</button>
+                        </form>
+                    </div>
                     <t t-out="0"/>
                 </body>
             </xpath>
@@ -261,7 +272,7 @@
         </template>
 
         <template id="runbot.build_menu">
-            <button t-attf-class="btn btn-default dropdown-toggle" data-toggle="dropdown" title="Build options" aria-label="Build options" aria-expanded="false">
+            <button t-attf-class="btn btn-default dropdown-toggle" data-bs-toggle="dropdown" title="Build options" aria-label="Build options" aria-expanded="false">
                 <i t-attf-class="fa  {{'fa-spinner' if bu.global_state == 'pending' else 'fa-cog'}} {{'' if bu.global_state in ('done', 'running') else 'fa-spin'}} fa-fw"/>
                 <span class="caret"/>
             </button>
@@ -341,7 +352,7 @@
         </template>
 
         <template id="runbot.branch_github_menu">
-          <button t-attf-class="btn btn-default btn-ssm" data-toggle="dropdown" title="Github links" aria-label="Github links" aria-expanded="false">
+          <button t-attf-class="btn btn-default btn-ssm" data-bs-toggle="dropdown" title="Github links" aria-label="Github links" aria-expanded="false">
             <i t-attf-class="fa fa-github {{'text-primary' if any(branch_id.is_pr and branch_id.alive for branch_id in bundle.branch_ids) else ''}}"/>
             <span class="caret"/>
           </button>
@@ -363,7 +374,7 @@
 
 
         <template id="runbot.bundle_stats_dropdown">
-            <button t-attf-class="btn btn-default dropdown-toggle" data-toggle="dropdown" title="Bundle Stats" aria-label="Bundle Stats" aria-expanded="false">
+            <button t-attf-class="btn btn-default dropdown-toggle" data-bs-toggle="dropdown" title="Bundle Stats" aria-label="Bundle Stats" aria-expanded="false">
                     <i t-attf-class="fa fa-bar-chart"/>
                     <span class="caret"/>
             </button>

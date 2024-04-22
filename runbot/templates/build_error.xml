@@ -22,10 +22,9 @@
                 <div class="col"><t t-esc="build_error.last_seen_date" t-options='{"widget": "datetime"}'/></div>
                 <div class="col col-md-3"><t t-esc="build_error.module_name"/></div>
                 <div class="col col-md-5">
-                  <button class="btn btn-link" type="button" data-toggle="collapse" t-attf-data-target="#collapse{{build_error.id}}" aria-expanded="true" aria-controls="collapseOne">
-                    <i class="fa fa-minus"/>
+                  <button class="btn accordion-button collapsed" type="button" data-bs-toggle="collapse" t-attf-data-bs-target="#collapse{{build_error.id}}" aria-expanded="true" aria-controls="collapseOne">
+                    <code><t t-esc="build_error.summary"/></code>
                   </button>
-                  <code><t t-esc="build_error.summary"/></code>
                 </div>
                 <div class="col">
                   <t t-foreach="build_error.trigger_ids" t-as="trigger">
@@ -81,7 +80,7 @@
                   <h4 class="d-inline"> All builds errors</h4>
                     <span class="ms-auto">
                       <span class="dropdown me-auto">
-                      <a role="button" href="#" class="dropdown-toggle btn btn-secondary" data-toggle="dropdown">
+                      <a role="button" href="#" class="dropdown-toggle btn btn-secondary" data-bs-toggle="dropdown">
                         Sort By: <t t-esc="request.params.get('sort', '')"/>
                       </a>
                       <div class="dropdown-menu" aria-labelledby="sortMenuButton" role="menu">

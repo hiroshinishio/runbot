@@ -85,12 +85,9 @@ class Runbot(Controller):
         '/runbot/submit'
     ], type='http', auth="public", methods=['GET', 'POST'], csrf=False)
     def submit(self, more=False, redirect='/', keep_search=False, category=False, filter_mode=False, update_triggers=False, **kwargs):
-        assert redirect.startswith('/runbot/')
+        assert redirect.startswith('/')
         response = werkzeug.utils.redirect(redirect)
         response.set_cookie('more', '1' if more else '0')
-        response.set_cookie('keep_search', '1' if keep_search else '0')
-        response.set_cookie('filter_mode', filter_mode or 'all')
-        response.set_cookie('category', category or '0')
         if update_triggers:
             enabled_triggers = []
             project_id = int(update_triggers)
@@ -188,8 +185,8 @@ class Runbot(Controller):
             })
 
         context.update({'message': request.env['ir.config_parameter'].sudo().get_param('runbot.runbot_message')})
-        res = request.render('runbot.bundles', context)
-        return res
+        # request.is_frontend = False  # remove inherit branding
+        return request.render('runbot.bundles', context)
 
     @route([
         '/runbot/bundle/<model("runbot.bundle"):bundle>',
