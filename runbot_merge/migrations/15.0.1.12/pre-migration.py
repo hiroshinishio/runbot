@@ -70,8 +70,114 @@ def hlink(url):
 def link(label, url):
     return f"{hlink(url)}{label}{hlink('')}"
 
+
+def batch_freezes(cr):
+    """Old freezes were created batch-less but marked as merged, to make things
+    more consistent and avoid losing them for e.g. synthetic git histories,
+    associate then with synthetic successful stagings
+    """
+    cr.execute("SELECT id FROM res_users WHERE login = 'moc@odoo.com'")
+    [uid] = cr.fetchone()
+    cr.execute("""
+    SELECT
+        array_agg(DISTINCT p.target) AS target,
+        array_agg(DISTINCT p.merge_date) AS merge_date,
+        json_object_agg(r.id, json_build_object(
+            'id', p.id,
+            'head', p.commits_map::json->''
+        )) AS prs
+
+    FROM runbot_merge_pull_requests p
+    JOIN runbot_merge_repository r ON (r.id = p.repository)
+    JOIN runbot_merge_branch t ON (t.id = p.target)
+
+    LEFT JOIN runbot_merge_batch_runbot_merge_pull_requests_rel bp ON (runbot_merge_pull_requests_id = p.id)
+    LEFT JOIN runbot_merge_batch b ON (runbot_merge_batch_id = b.id)
+    LEFT JOIN runbot_merge_stagings s ON (b.staging_id = s.id)
+
+    WHERE p.state = 'merged'
+      AND runbot_merge_pull_requests_id IS NULL
+      AND p.id != 1
+
+    GROUP BY label;
+    """)
+    freeze_batches = [
+        (target, merge_date, {int(r): p for r, p in prs.items()})
+        for [target], [merge_date], prs in cr._obj
+    ]
+
+    stagings = []
+    for t, m, prs in freeze_batches:
+        # fetch the preceding successful staging on master
+        cr.execute("""
+            SELECT id
+            FROM runbot_merge_stagings
+            -- target 1 = master (so we want the last successful master staging before the freeze)
+            WHERE state = 'success' AND staged_at < %s AND target = 1
+            ORDER BY staged_at DESC
+            LIMIT 1
+        """, [m])
+        cr.execute("""
+            SELECT repository_id, commit_id
+            FROM runbot_merge_stagings_commits
+            WHERE staging_id = %s
+        """, cr.fetchone())
+        commits = dict(cr._obj)
+
+        cr.execute("""
+            INSERT INTO runbot_merge_stagings
+            (state, active, create_uid, write_uid, target, staged_at, create_date, write_date)
+            VALUES ('success', false, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, [uid, uid, t, m, m, m])
+        [[staging]] = cr.fetchall()
+        stagings.append(staging)
+
+        for repo, pr in prs.items():
+            if repo not in commits:
+                cr.execute("""
+                    INSERT INTO runbot_merge_commit (sha) VALUES (%s)
+                    ON CONFLICT (sha) DO UPDATE
+                        SET to_check = runbot_merge.to_check
+                    RETURNING id
+                """, [pr['head']])
+                [cid] = cr.fetchone()
+                commits[repo] = cid
+
+        for repo, commit in commits.items():
+            cr.execute("""
+                INSERT INTO runbot_merge_stagings_commits
+                    (staging_id, repository_id, commit_id)
+                VALUES (%s, %s, %s)
+            """, [staging, repo, commit])
+            cr.execute("""
+                INSERT INTO runbot_merge_stagings_heads
+                    (staging_id, repository_id, commit_id)
+                VALUES (%s, %s, %s)
+            """, [staging, repo, commit])
+
+    batches = []
+    for staging, (_, date, _) in zip(stagings, freeze_batches):
+        cr.execute("""
+            INSERT INTO runbot_merge_batch
+                (create_uid, write_uid, staging_id, create_date, write_date)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
+        """, [uid, uid, staging, date, date])
+        [[batch]] = cr.fetchall()
+        batches.append(batch)
+
+    for batch, (_, _, prs) in zip(batches, freeze_batches):
+        for pr in prs.values():
+            cr.execute("""
+                INSERT INTO runbot_merge_batch_runbot_merge_pull_requests_rel
+                    (runbot_merge_batch_id, runbot_merge_pull_requests_id)
+                VALUES (%s, %s)
+            """, [batch, pr['id']])
+
+
 def migrate(cr, version):
-    cr.execute("select 1 from forwardport_batches")
+    cr.execute("select from forwardport_batches")
     assert not cr.rowcount, f"can't migrate the mergebot with enqueued forward ports (found {cr.rowcount})"
     # avoid SQL taking absolutely ungodly amounts of time
     cr.execute("SET statement_timeout = '60s'")
@@ -83,6 +189,7 @@ def migrate(cr, version):
     """)
 
     cleanup(cr)
+    batch_freezes(cr)
 
     cr.execute("""
     SELECT
@@ -218,17 +325,13 @@ def migrate(cr, version):
             cr.rowcount,
         )
 
-    # FIXME: fixup PRs marked as merged which don't actually have a batch / staging?
-
     # the relinked batches are those from stagings, but that means merged PRs
     # (or at least PRs we tried to merge), we also need batches for non-closed
     # non-merged PRs
-    logger.info("collect unbatched PRs PRs...")
+    logger.info("collect unbatched PRs...")
     cr.execute("""
     SELECT
         CASE
-            -- FIXME: should closed PRs w/o a batch be split out or matched with
-            --        one another?
             WHEN label SIMILAR TO '%%:patch-[[:digit:]]+'
                 THEN id::text
             ELSE label
@@ -271,8 +374,6 @@ def migrate(cr, version):
                 for p, c in prs
             ),
         )
-
-    # FIXME: leverage WEIRD_SEQUENCES
 
     logger.info("move pr data to batches...")
     cr.execute("""

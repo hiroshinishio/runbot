@@ -1223,6 +1223,16 @@ def test_freeze_complete(env, project, repo_a, repo_b, repo_c, users, config):
     # stuff that's done directly
     assert all(pr_id.state == 'merged' for pr_id in release_pr_ids)
     assert pr_bump_id.state == 'merged'
+    assert pr_bump_id.commits_map != '{}'
+
+    assert len(release_pr_ids.batch_id) == 1
+    assert release_pr_ids.batch_id.merge_date
+    assert release_pr_ids.batch_id.staging_ids.target.name == '1.1'
+    assert release_pr_ids.batch_id.staging_ids.state == 'success'
+
+    assert pr_bump_id.batch_id.merge_date
+    assert pr_bump_id.batch_id.staging_ids.target.name == 'master'
+    assert pr_bump_id.batch_id.staging_ids.state == 'success'
 
     # stuff that's behind a cron
     env.run_crons()
