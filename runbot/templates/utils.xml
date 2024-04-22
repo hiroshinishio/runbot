@@ -3,7 +3,7 @@
     <data>
         <!-- base layout -->
         <template id="runbot.base_page">
-            <html>
+            <html data-bs-theme="light">
                 <head>
                     <title t-esc="title or 'Runbot'"/>
                     <link rel="stylesheet" type="text/css" href="/runbot/static/src/libs/bootstrap/css/bootstrap.css"/>
@@ -32,7 +32,7 @@
             <xpath expr="//body" position="replace">
                 <body>
                     <header>
-                        <nav class="navbar navbar-expand-md navbar-light bg-light">
+                        <nav class="navbar navbar-expand-md bg-body-tertiary">
                             <a t-if="project" t-att-href="qu(search=search)">
                                 <b style="color:#777;">
                                     <t t-esc="project.name"/>
@@ -42,7 +42,7 @@
                                 <span class="navbar-toggler-icon"/>
                             </button>
                             <div class="collapse navbar-collapse" id="top_menu_collapse">
-                                <ul class="nav navbar-nav ml-auto text-right" id="top_menu">
+                                <ul class="nav navbar-nav ms-auto text-end" id="top_menu">
                                     <t t-if="projects">
                                         <t t-foreach="projects" t-as="l_project">
                                             <li class="nav-item">
@@ -166,7 +166,7 @@
 
         <template id="runbot.slots_infos" name="Hosts slot nb pending/testing/slots">
             <a href="/runbot/load_info" class="slots_infos">
-                <span t-attf-class="badge badge-{{pending_level}}">
+                <span t-attf-class="badge text-bg-{{pending_level}}">
                     Pending:
                     <t t-esc="pending_count"/><span title="Assigned build (reserved host)" t-if="pending_assigned_count">(<t t-esc="pending_assigned_count"/>)</span>
                 </span>
@@ -179,7 +179,7 @@
                     <t t-if="int(testing)/workers > 0.75" t-set="klass">warning</t>
                     <t t-if="int(testing)/workers >= 1" t-set="klass">danger</t>
                 </t>
-                <span t-attf-class="badge badge-{{klass}}">
+                <span t-attf-class="badge text-bg-{{klass}}">
                     Testing:
                     <t t-esc="testing"/>
                     /

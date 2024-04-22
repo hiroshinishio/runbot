@@ -5,19 +5,17 @@
       <t t-call='runbot.layout'>
         <t t-set="nav_form">
           <form class="form-inline my-2 my-lg-0" role="search" t-att-action="qu(search='')" method="get">
-            <div class="input-group md-form form-sm form-2 pl-0">
+            <div class="input-group md-form form-sm form-2 ps-0">
               <input class="form-control my-0 py-1" type="text" placeholder="Search" aria-label="Search" name="search" t-att-value="search"/>
-              <div class="input-group-append">
-                <a t-if="has_pr" class="btn btn-primary active input-group-text" title="All" t-att-href="qu(has_pr=None)">
-                  <i class="fa fa-github text-grey"/>
-                </a>
-                <a t-else="" class="btn input-group-text" title="Open pull requests" t-att-href="qu(has_pr=1)">
-                  <i class="fa fa-github text-grey"/>
-                </a>
-                <button type='submit' class="input-group-text">
-                  <i class="fa fa-search text-grey"/>
-                </button>
-              </div>
+              <a t-if="has_pr" class="btn btn-primary active input-group-text" title="All" t-att-href="qu(has_pr=None)">
+                <i class="fa fa-github text-grey"/>
+              </a>
+              <a t-else="" class="btn input-group-text" title="Open pull requests" t-att-href="qu(has_pr=1)">
+                <i class="fa fa-github text-grey"/>
+              </a>
+              <button type='submit' class="input-group-text">
+                <i class="fa fa-search text-grey"/>
+              </button>
             </div>
           </form>
         </t>
@@ -64,11 +62,11 @@
                       </div>
                     </div>
                     <div t-if="bundle.host_id">
-                      <span class="badge badge-info" t-esc="bundle.host_id.name"></span>
+                      <span class="badge text-bg-info" t-esc="bundle.host_id.name"></span>
                     </div>
                   </div>
                   <div class="col-md-9 col-lg-10">
-                    <div class="row no-gutters">
+                    <div class="row gx-0">
                       <div t-foreach="bundle.last_batchs" t-as="batch" t-attf-class="col-md-6 col-xl-3 {{'d-none d-xl-block' if batch_index > 1 else ''}}">
                         <t t-call="runbot.batch_tile"/>
                       </div>
@@ -89,14 +87,14 @@
       <t t-if="batch.state=='done' and any(slot.build_id.global_result in ('ko', 'warn') for slot in batch.slot_ids)" t-set="klass">danger</t>
 
       <div t-attf-class="batch_tile if more">
-        <div t-attf-class="card bg-{{klass}}-light">
+        <div t-attf-class="card bg-{{klass}}-subtle">
           <a t-attf-href="/runbot/batch/#{batch.id}" title="View Batch">
             <div class="batch_header">
-              <span t-attf-class="badge badge-{{'warning' if batch.has_warning else 'light'}}">
+              <span t-attf-class="badge text-bg-{{'warning' if batch.has_warning else 'light'}}">
                 <t t-esc="batch._get_formated_age()"/>
                 <i class="fa fa-exclamation-triangle" t-if="batch.has_warning"/>
               </span>
-              <span class="float-right header_hover">View batch...</span>
+              <span class="float-end header_hover">View batch...</span>
             </div>
           </a>
           <t t-if="batch.state=='preparing'">
@@ -114,14 +112,14 @@
           <div t-if='more' class="batch_commits">
             <div t-foreach="batch.commit_link_ids.sorted(lambda cl: (cl.commit_id.repo_id.sequence, cl.commit_id.repo_id.id))" t-as="commit_link" class="one_line">
 
-              <a t-attf-href="/runbot/commit/#{commit_link.commit_id.id}" t-attf-class="badge badge-light batch_commit match_type_{{commit_link.match_type}}">
+              <a t-attf-href="/runbot/commit/#{commit_link.commit_id.id}" t-attf-class="badge text-bg-light batch_commit match_type_{{commit_link.match_type}}">
                 <i class="fa fa-fw fa-hashtag" t-if="commit_link.match_type == 'new'" title="This commit is a new head"/>
                 <i class="fa fa-fw fa-link" t-if="commit_link.match_type == 'head'" title="This commit is an existing head from bundle branches"/>
                 <i class="fa fa-fw fa-code-fork" t-if="commit_link.match_type == 'base_match'" title="This commit is matched from a base batch with matching merge_base"/>
                 <i class="fa fa-fw fa-clock-o" t-if="commit_link.match_type == 'base_head'" title="This commit is the head of a base branch"/>
                 <t t-esc="commit_link.commit_id.dname"/>
               </a>
-              <a t-att-href="'https://%s/commit/%s' % (commit_link.branch_id.remote_id.base_url, commit_link.commit_id.name)" class="badge badge-light" title="View Commit on Github"><i class="fa fa-github"/></a>
+              <a t-att-href="'https://%s/commit/%s' % (commit_link.branch_id.remote_id.base_url, commit_link.commit_id.name)" class="badge text-bg-light" title="View Commit on Github"><i class="fa fa-github"/></a>
               <span t-esc="commit_link.commit_id.subject"/>
             </div>
           </div>

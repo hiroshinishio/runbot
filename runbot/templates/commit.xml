@@ -31,8 +31,8 @@
                 <td>
                   <t t-esc="commit.name"/>
                   <div class="btn-group" role="group">
-                    <a t-att-href="'' if not reflogs else 'https://%s/commit/%s' % (reflogs[0].branch_id.remote_id.base_url, commit.name)" class="btn btn-sm text-left" title="View Commit on Github"><i class="fa fa-github"/></a>
-                    <a groups="runbot.group_runbot_admin" class="btn btn-sm fa fa-list text-left" t-attf-href="/web/#id={{commit.id}}&amp;view_type=form&amp;model=runbot.commit" target="new" title="View Commit in Backend"/>
+                    <a t-att-href="'' if not reflogs else 'https://%s/commit/%s' % (reflogs[0].branch_id.remote_id.base_url, commit.name)" class="btn btn-sm text-start" title="View Commit on Github"><i class="fa fa-github"/></a>
+                    <a groups="runbot.group_runbot_admin" class="btn btn-sm fa fa-list text-start" t-attf-href="/web/#id={{commit.id}}&amp;view_type=form&amp;model=runbot.commit" target="new" title="View Commit in Backend"/>
                   </div>
                 </td>
               </tr>

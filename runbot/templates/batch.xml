@@ -5,6 +5,7 @@
             <t t-call="runbot.layout">
                 <div class="row">
                     <div class="col-lg-6">
+                    <t t-set="batch_class" t-value="'bg-info-subtle' if batch.state=='preparing' else 'bg-success-subtle' if not any(log.level != 'INFO' for log in batch.log_ids) else 'bg-warning-subtle'"/>
                     <table class="table table-stripped">
                         <tr>
                             <td>Bundle</td>
@@ -32,7 +33,7 @@
                             <td>Last update</td>
                             <td>
                                 <t t-esc="batch.last_update"/>
-                                <span class="badge badge-info" t-esc="s2human(batch.last_update - batch.create_date)"/>
+                                <span class="badge text-bg-info" t-esc="s2human(batch.last_update - batch.create_date)"/>
                             </td>
                         </tr>
                         <tr t-if="more and batch.reference_batch_ids">
@@ -42,9 +43,9 @@
                                 <div><a t-attf-href="/runbot/batch/{{reference_batch.id}}"><t t-esc="reference_batch.bundle_id.version_id.name"/> (<t t-esc="reference_batch.id"/>)</a></div>
                             </td>
                         </tr>
-                        <tr t-att-class="'bg-info-light' if batch.state=='preparing' else 'bg-success-light' if not any(log.level != 'INFO' for log in batch.log_ids) else 'bg-warning-light'">
-                            <td>Commits</td>
-                            <td>
+                        <tr>
+                            <td t-att-class="batch_class" >Commits</td>
+                            <td t-att-class="batch_class" >
                                 <div t-foreach="batch.commit_link_ids.sorted(key=lambda lc: (lc.commit_id.repo_id.sequence, lc.commit_id.repo_id.id))" t-as="commit_link">
                                     <t t-set="commit" t-value="commit_link.commit_id"/>
                                     <span/>
@@ -55,7 +56,7 @@
                                         <i class="fa fa-fw fa-clock-o" t-if="commit_link.match_type == 'base_head'" title="This commit is the head of a base branch"/>
                                         <span class="label" t-esc="commit.dname"/>
                                     </a>
-                                    <a t-att-href="'https://%s/commit/%s' % (commit_link.branch_id.remote_id.base_url, commit_link.commit_id.name)" class="badge badge-light" title="View Commit on Github"><i class="fa fa-github"/></a>
+                                    <a t-att-href="'https://%s/commit/%s' % (commit_link.branch_id.remote_id.base_url, commit_link.commit_id.name)" class="badge text-bg-subtle" title="View Commit on Github"><i class="fa fa-github"/></a>
                                     <small t-if="commit_link.match_type and commit_link.match_type.startswith('base')">
                                         from base:
                                         <span t-esc="commit_link.branch_id.name"/>

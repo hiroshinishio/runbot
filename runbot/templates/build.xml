@@ -48,7 +48,7 @@
                   </a>
                 </li>
               </ol>
-              <span class="btn-group pr-3">
+              <span class="btn-group pe-3">
                 <a t-att-href="prev_ko.build_url" role="button" t-attf-title="Previous ko {{prev_ko.display_name}}"
                    t-attf-class="{{'' if prev_ko else 'disabled '}}btn btn-default fa fa-angle-double-left"></a>
                 <a t-att-href="prev_bu.build_url" role="button" t-attf-title="Previous {{prev_bu.display_name}}"
@@ -66,7 +66,7 @@
               <t t-set="build" t-value="build"/>
             </t>
           </t>
-          <div t-attf-class="bg-{{rowclass.strip()}}-light {{'col-md-6' if build.children_ids else 'col-md-12'}}">
+          <div t-attf-class="bg-{{rowclass.strip()}}-subtle {{'col-md-6' if build.children_ids else 'col-md-12'}}">
             <div class="build_details">
               <!-- Batch/bundles links-->
               <t t-if="len(bundles) > 1">
@@ -103,7 +103,7 @@
                   from base branch
                   <br/>
                 </t>
-                <div t-else="" class="ml-3">
+                <div t-else="" class="ms-3">
                   <b>Subject:</b>
                   <t t-esc="build_commit.commit_id.subject"/>
                   <br/>
@@ -148,7 +148,7 @@
                   <t t-foreach="build.params_id.build_ids" t-as="simbuild">
                     <a t-if="simbuild.id != build.id" t-attf-href="/runbot/build/#{simbuild.id}">
                       <span
-                        t-attf-class="badge badge-{{simbuild._get_color_class()}}"
+                        t-attf-class="badge text-bg-{{simbuild._get_color_class()}}"
                         t-esc="simbuild.id"/>
                     </a>
                   </t>
@@ -196,7 +196,7 @@
                     <t t-set="build" t-value="child"/>
                   </t>
                 </t>
-                <tr t-attf-class="bg-{{rowclass.strip()}}-light{{' line-through' if child.orphan_result else ''}}">
+                <tr t-attf-class="bg-{{rowclass.strip()}}-subtle{{' line-through' if child.orphan_result else ''}}">
                   <td>
                     <a t-attf-href="/runbot/{{'batch/%s/' % from_batch.id if from_batch else ''}}build/{{child.id}}">
                       Build
@@ -223,7 +223,7 @@
                     </t>
                   </td>
                   <td>
-                    <span t-attf-class="badge badge-info" t-esc="s2human(child.build_time)"/>
+                    <span t-attf-class="badge text-bg-info" t-esc="s2human(child.build_time)"/>
                   </td>
                   <td>
                     <t t-call="runbot.build_button">
@@ -266,7 +266,7 @@
                       <t t-set="build" t-value="subbuild"/>
                     </t>
                   </t>
-                  <td t-attf-class="bg-{{message_class.strip() or logclass}}-light">
+                  <td t-attf-class="bg-{{message_class.strip() or logclass}}-subtle">
                     <t t-if="l.type not in ('runbot', 'link', 'markdown')">
                       <t t-if="l.type == 'subbuild'">
                         <a t-attf-href="/runbot/build/{{l.path}}">
@@ -332,7 +332,7 @@
                       </t>
                     </t>
                   </td>
-                  <td t-attf-class="bg-{{message_class.strip() or logclass}}-light">
+                  <td t-attf-class="bg-{{message_class.strip() or logclass}}-subtle">
                     <t t-if="l.level in ('CRITICAL', 'ERROR', 'WARNING') and not l.with_context(active_test=False).error_id">
                       <small>
                         <a groups="runbot.group_runbot_admin" t-attf-href="/runbot/parse_log/{{l.id}}" class="sm" title="Parse this log line to follow this error.">
@@ -353,7 +353,7 @@
                   </t>
                   <tr>
                     <td/><td/><td/>
-                    <td t-attf-class="bg-{{'info' if error.active else 'success'}}-light {{size}}" colspan="2">
+                    <td t-attf-class="bg-{{'info' if error.active else 'success'}}-subtle {{size}}" colspan="2">
                       This error is already <a href="#" t-attf-title="{{'Was detected by runbot in nightly builds.' if error.active else 'Either the error is not properly fixed or the branch does not contain the fix.'}}"><t t-esc="'known' if error.active else 'fixed'"/></a>.
                       <a groups="runbot.group_user" t-attf-href="/web#id={{l.error_id.id}}&amp;view_type=form&amp;model=runbot.build.error&amp;menu_id={{env['ir.model.data']._xmlid_to_res_id('runbot.runbot_menu_root')}}" title="View in Backend" target="new">
                         <i t-attf-class="fa fa-{{icon}}"/>
@@ -379,7 +379,7 @@
                     <t t-set="build" t-value="build"/>
                   </t>
                 </t>
-                <tr t-attf-class="bg-{{rowclass.strip()}}-light{{' line-through' if build.orphan_result else ''}}">
+                <tr t-attf-class="bg-{{rowclass.strip()}}-subtle{{' line-through' if build.orphan_result else ''}}">
                   <td>
                       <t t-esc="build.create_date"/>
                   </td>

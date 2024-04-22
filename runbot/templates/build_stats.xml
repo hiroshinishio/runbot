@@ -7,7 +7,7 @@
           <div>
             <div class="row">
               <div class="col-md-4">
-                <div class="bg-success-light">
+                <div class="bg-success-subtle">
                   <b>Build: </b><a t-attf-href="/runbot/build/{{build.id}}"><t t-esc="build.id"/></a><br/>
                   <t t-if="build.description">
                     <b>Description:</b>
@@ -25,12 +25,12 @@
                     <a t-attf-href="/runbot/commit/{{build_commit.commit_id.id}}">
                       <t t-esc="build_commit.commit_id.dname"/>
                     </a>
-                    <a t-att-href="'https://%s/commit/%s' % (build_commit.branch_id.remote_id.base_url, build_commit.commit_id.name)" class="btn btn-sm text-left" title="View Commit on Github"><i class="fa fa-github"/></a>
+                    <a t-att-href="'https://%s/commit/%s' % (build_commit.branch_id.remote_id.base_url, build_commit.commit_id.name)" class="btn btn-sm text-start" title="View Commit on Github"><i class="fa fa-github"/></a>
                     <t t-if="build_commit.match_type in ('default', 'pr_target', 'prefix') ">
                       from base branch
                       <br/>
                     </t>
-                    <div t-else="" class="ml-3">
+                    <div t-else="" class="ms-3">
                       <b>Subject:</b>
                       <t t-esc="build_commit.commit_id.subject"/>
                       <br/>
@@ -69,7 +69,7 @@
         <div class="container-fluid">
           <nav class="navbar navbar-light">
             <div class="container">
-              <b>Bundle:</b><t t-esc="bundle.name"/><br/>
+              <b>Bundle:</b><t t-esc="bundle.name"/>
               <b>Trigger:</b><t t-esc="trigger.name"/>
               <b>Stat Category:</b>
               <select id="key_category_selector" class="form-select" aria-label="Stat Category">

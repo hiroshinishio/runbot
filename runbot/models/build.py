@@ -1211,6 +1211,7 @@ class BuildResult(models.Model):
 
         if self.global_result in ('skipped', 'killed', 'manually_killed'):
             return 'killed'
+        return 'default'
 
     def _github_status(self):
         """Notify github of failed/successful builds"""

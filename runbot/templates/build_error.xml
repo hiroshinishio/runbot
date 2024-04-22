@@ -29,7 +29,7 @@
                 </div>
                 <div class="col">
                   <t t-foreach="build_error.trigger_ids" t-as="trigger">
-                    <span class="badge badge-pill badge-light small"><t t-esc="trigger.name"/></span>
+                    <span class="badge text-bg-pill text-bg-info small"><t t-esc="trigger.name"/></span>
                   </t>
                 </div>
                 <div class="col">
@@ -39,9 +39,9 @@
                 <div class="col">
                   <a t-att-href="build_error.last_seen_build_id.build_url" t-attf-title="View last affected build ({{build_error.last_seen_build_id.id}})"><i class="fa fa-external-link"/></a>
                   <a groups="base.group_user" t-attf-href="/web/#id={{build_error.id}}&amp;view_type=form&amp;model=runbot.build.error&amp;menu_id={{env['ir.model.data']._xmlid_to_res_id('runbot.runbot_menu_root')}}" target="new" title="View in Backend">
-                    <span class="badge badge-info" t-esc="build_error.build_count" t-attf-title="This error was seen {{build_error.build_count}} View in backend"/>
+                    <span class="badge text-bg-info" t-esc="build_error.build_count" t-attf-title="This error was seen {{build_error.build_count}} View in backend"/>
                   </a>
-                  <span groups="!base.group_user" class="badge badge-info" t-esc="build_error.build_count" t-attf-title="This error was seen {{build_error.build_count}}"/>
+                  <span groups="!base.group_user" class="badge text-bg-info" t-esc="build_error.build_count" t-attf-title="This error was seen {{build_error.build_count}}"/>
                   <span class="fa fa-random" t-if="build_error.random"/>
                 </div>
               </div>
@@ -49,7 +49,7 @@
 
             <div t-attf-id="collapse{{build_error.id}}" class="collapse" aria-labelledby="headingOne" t-attf-data-parent="#accordion_{{accordion_id}}">
               <div class="card-body">
-                <pre class="pre-scrollable bg-danger-light"><t t-esc="build_error.content.strip()" /></pre>
+                <pre class="pre-scrollable bg-danger-subtle"><t t-esc="build_error.content.strip()" /></pre>
               </div>
             </div>
           </div>
@@ -79,8 +79,8 @@
               <t t-if="build_errors">
                 <nav class="navbar navbar-expand-lg navbar-light">
                   <h4 class="d-inline"> All builds errors</h4>
-                    <span class="ml-auto">
-                      <span class="dropdown mr-auto">
+                    <span class="ms-auto">
+                      <span class="dropdown me-auto">
                       <a role="button" href="#" class="dropdown-toggle btn btn-secondary" data-toggle="dropdown">
                         Sort By: <t t-esc="request.params.get('sort', '')"/>
                       </a>
@@ -91,7 +91,7 @@
                       </div>
                     </span>
                   </span>
-                  <span class="ml-auto">
+                  <span class="ms-auto">
                     <t t-call="website.pager" />
                   </span>
                 </nav>

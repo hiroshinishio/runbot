@@ -1,11 +1,84 @@
+
+:root {
+	--bs-success-bg-subtle: #dff0d8;
+	--bs-danger-bg-subtle: #f2dede;
+	--bs-warning-bg-subtle: #fff9e6;
+	--bs-info-bg-subtle: #d9edf7;
+	--bs-info-rgb: 23, 162, 184;
+	--gray:  #6c757d; /* used for batch limitation */
+}
+
+
+.btn-default {
+	--bs-btn-color: #444;
+	--bs-btn-bg: #fff;
+	--bs-btn-border-color: #ccc;
+	--bs-btn-hover-color: #444;
+	--bs-btn-hover-bg: #ccc;
+	--bs-btn-hover-border-color: #ccc;
+	--bs-btn-focus-shadow-rgb: 60, 153, 110;
+	--bs-btn-active-color: #444;;
+	--bs-btn-active-bg: #fff;
+	--bs-btn-active-border-color: #fff;
+	--bs-btn-active-shadow: inset 0 3px 5px rgba(0, 0, 0, 0.125);
+	--bs-btn-disabled-color: #444;;
+	--bs-btn-disabled-bg: #fff;
+	--bs-btn-disabled-border-color: #ccc;;
+}
+
+.btn-success {
+	--bs-btn-color: #fff;
+	--bs-btn-bg: #198754;
+	--bs-btn-border-color: #198754;
+	--bs-btn-hover-color: #fff;
+	--bs-btn-hover-bg: #157347;
+	--bs-btn-hover-border-color: #146c43;
+	--bs-btn-focus-shadow-rgb: 60, 153, 110;
+	--bs-btn-active-color: #fff;
+	--bs-btn-active-bg: #146c43;
+	--bs-btn-active-border-color: #13653f;
+	--bs-btn-active-shadow: inset 0 3px 5px rgba(0, 0, 0, 0.125);
+	--bs-btn-disabled-color: #fff;
+	--bs-btn-disabled-bg: #28a745;
+	--bs-btn-disabled-border-color: #28a745;
+  }
+
+
+.btn-info {
+    --bs-btn-color: #FFF;
+    --bs-btn-bg: #17a2b8;
+    --bs-btn-border-color: #17a2b8;
+    --bs-btn-hover-color: #FFF;
+    --bs-btn-hover-bg: #31d2f2;
+    --bs-btn-hover-border-color: #25cff2;
+    --bs-btn-focus-shadow-rgb: 11, 172, 204;
+    --bs-btn-active-color: #FFF;
+    --bs-btn-active-bg: #3dd5f3;
+    --bs-btn-active-border-color: #25cff2;
+    --bs-btn-active-shadow: inset 0 3px 5px rgba(0, 0, 0, 0.125);
+    --bs-btn-disabled-color: #FFF;
+    --bs-btn-disabled-bg: #17a2b8;
+    --bs-btn-disabled-border-color: #17a2b8;
+}
+
+.text-bg-info {
+	color: #FFF !important; /* black by default, changes from previous version, color forced to fit with --bs-info-rgb*/
+}
+
+.table-responsive {
+	display: block;  /* more condensed table, to replace */
+}
+
+.table {
+	--bs-table-bg: transparent; /* Forced to white in bootstrap latest version, hides the color of sub builds, batch commits, ...*/
+}
+
 body {
 	margin: 0;
     font-size: 0.875rem;
     font-weight: 400;
     line-height: 1.5;
-    color: #212529;
     text-align: left;
-    background-color: white;
 }
 
 form {
@@ -64,17 +137,6 @@ body, .table {
 	color: #444;
 }
 
-.btn-default {
-	background-color: #fff;
-	color: #444;
-	border-color: #ccc;
-}
-
-.btn-default:hover {
-	background-color: #ccc;
-	color: #444;
-	border-color: #ccc;
-}
 
 .btn-sm, .btn-group-sm > .btn {
 	padding: 0.25rem 0.5rem;
@@ -113,26 +175,6 @@ body, .table {
 	margin-left: 10px;
 }
 
-:root {
-	--info-light: #d9edf7;
-}
-
-.bg-success-light {
-	background-color: #dff0d8;
-}
-
-.bg-danger-light {
-	background-color: #f2dede;
-}
-
-.bg-info-light {
-	background-color: var(--info-light);
-}
-
-.bg-warning-light {
-	background-color: #fff9e6;
-}
-
 .text-info {
 	color: #096b72 !important;
 }
@@ -149,7 +191,7 @@ body, .table {
 	background-color: #aaa;
 }
 
-.badge-killed {
+.text-bg-killed {
 	background-color: #aaa;
 }
 
@@ -159,10 +201,6 @@ body, .table {
 
 .line-through {
 	text-decoration: line-through;
-}
-
-.badge-light {
-	border: 1px solid #AAA;
 }
 
 .slot_button_group {
