@@ -1,32 +1,26 @@
-
 :root {
+	--gray:  #6c757d; /* used for batch limitation */
+}
+
+/*
+ * Legacy theme
+ */
+
+:root[data-bs-theme=legacy] { /* to match initial runbot style*/
 	--bs-success-bg-subtle: #dff0d8;
 	--bs-danger-bg-subtle: #f2dede;
 	--bs-warning-bg-subtle: #fff9e6;
 	--bs-info-bg-subtle: #d9edf7;
 	--bs-info-rgb: 23, 162, 184;
-	--gray:  #6c757d; /* used for batch limitation */
+}
+
+[data-bs-theme=legacy] .text-bg-info {
+	color: #fff !important; /* black by default, changes from previous version, color forced to fit with --bs-info-rgb*/
 }
 
 
-.btn-default {
-	--bs-btn-color: #444;
-	--bs-btn-bg: #fff;
-	--bs-btn-border-color: #ccc;
-	--bs-btn-hover-color: #444;
-	--bs-btn-hover-bg: #ccc;
-	--bs-btn-hover-border-color: #ccc;
-	--bs-btn-focus-shadow-rgb: 60, 153, 110;
-	--bs-btn-active-color: #444;;
-	--bs-btn-active-bg: #fff;
-	--bs-btn-active-border-color: #fff;
-	--bs-btn-active-shadow: inset 0 3px 5px rgba(0, 0, 0, 0.125);
-	--bs-btn-disabled-color: #444;;
-	--bs-btn-disabled-bg: #fff;
-	--bs-btn-disabled-border-color: #ccc;;
-}
 
-.btn-success {
+[data-bs-theme=legacy] .btn-success {
 	--bs-btn-color: #fff;
 	--bs-btn-bg: #198754;
 	--bs-btn-border-color: #198754;
@@ -43,6 +37,38 @@
 	--bs-btn-disabled-border-color: #28a745;
   }
 
+
+:root {
+	--alternative:#ccc;
+	--btn-default-color: var(--bs-body-color);
+	--btn-default-border:#ccc;
+	--bs-default-rgb: var(--bs-body-color-rgb);
+	--active-project-color: #777;
+	
+}
+
+:root[data-bs-theme=dark] {
+	--btn-default-border:#333;
+	--btn-default-color: var(--bs-body-color);
+	--active-project-color: #CCC;
+}
+
+.btn-default {
+	--bs-btn-color: var(--btn-default-color);
+	--bs-btn-bg: var(--bs-body-bg);
+	--bs-btn-border-color: var(--btn-default-border);
+	--bs-btn-hover-color: var(--btn-default-color);
+	--bs-btn-hover-bg: var(--btn-default-border);
+	--bs-btn-hover-border-color: var(--btn-default-border);
+	--bs-btn-focus-shadow-rgb: 60, 153, 110;
+	--bs-btn-active-color: var(--btn-default-color);
+	--bs-btn-active-bg: var(--bs-body-bg);
+	--bs-btn-active-border-color: var(--bs-body-bg);
+	--bs-btn-active-shadow: inset 0 3px 5px rgba(0, 0, 0, 0.125);
+	--bs-btn-disabled-color: var(--btn-default-color);
+	--bs-btn-disabled-bg: var(--bs-body-bg);
+	--bs-btn-disabled-border-color: var(--btn-default-border);;
+}
 
 .btn-info {
     --bs-btn-color: #FFF;
@@ -61,8 +87,9 @@
     --bs-btn-disabled-border-color: #17a2b8;
 }
 
-.text-bg-info {
-	color: #FFF !important; /* black by default, changes from previous version, color forced to fit with --bs-info-rgb*/
+.text-bg-default {
+	color: var(--bs-body-color) !important;
+	background-color: RGBA(var(--bs-body-bg-rgb), var(--bs-bg-opacity, 1)) !important;
 }
 
 .table-responsive {
@@ -71,6 +98,11 @@
 
 .table {
 	--bs-table-bg: transparent; /* Forced to white in bootstrap latest version, hides the color of sub builds, batch commits, ...*/
+}
+
+.active_project {
+	color: var(--active-project-color);
+	margin-left: 15px;
 }
 
 body {
@@ -134,7 +166,6 @@ a.slots_infos:hover {
 
 body, .table {
 	font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
-	color: #444;
 }
 
 
@@ -226,7 +257,8 @@ body, .table {
 }
 
 .batch_header:hover {
-	background-color: rgba(0, 0, 0, 0.1)
+	color: var(--bs-body-color);
+	background-color: rgba(0, 0, 0, 0.3)
 }
 
 .header_hover {
@@ -244,16 +276,9 @@ body, .table {
 }
 
 .batch_commits {
-	background-color: white;
-}
-
-.batch_commits {
 	padding: 2px;
 }
 
-.match_type_new {
-	background-color: var(--info-light);
-}
 
 .batch_row .slot_container {
 	flex: 1 0 200px;

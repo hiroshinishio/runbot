@@ -90,7 +90,7 @@
         <div t-attf-class="card bg-{{klass}}-subtle">
           <a t-attf-href="/runbot/batch/#{batch.id}" title="View Batch">
             <div class="batch_header">
-              <span t-attf-class="badge text-bg-{{'warning' if batch.has_warning else 'light'}}">
+              <span t-attf-class="badge text-bg-{{'warning' if batch.has_warning else 'default'}}">
                 <t t-esc="batch._get_formated_age()"/>
                 <i class="fa fa-exclamation-triangle" t-if="batch.has_warning"/>
               </span>
@@ -112,14 +112,15 @@
           <div t-if='more' class="batch_commits">
             <div t-foreach="batch.commit_link_ids.sorted(lambda cl: (cl.commit_id.repo_id.sequence, cl.commit_id.repo_id.id))" t-as="commit_link" class="one_line">
 
-              <a t-attf-href="/runbot/commit/#{commit_link.commit_id.id}" t-attf-class="badge text-bg-light batch_commit match_type_{{commit_link.match_type}}">
+              <t t-set="match_class" t-value="'info' if commit_link.match_type == 'new' else 'secondary'"/>
+              <a t-attf-href="/runbot/commit/#{commit_link.commit_id.id}" t-attf-class="badge text-bg-{{match_class}}">
                 <i class="fa fa-fw fa-hashtag" t-if="commit_link.match_type == 'new'" title="This commit is a new head"/>
                 <i class="fa fa-fw fa-link" t-if="commit_link.match_type == 'head'" title="This commit is an existing head from bundle branches"/>
                 <i class="fa fa-fw fa-code-fork" t-if="commit_link.match_type == 'base_match'" title="This commit is matched from a base batch with matching merge_base"/>
                 <i class="fa fa-fw fa-clock-o" t-if="commit_link.match_type == 'base_head'" title="This commit is the head of a base branch"/>
                 <t t-esc="commit_link.commit_id.dname"/>
               </a>
-              <a t-att-href="'https://%s/commit/%s' % (commit_link.branch_id.remote_id.base_url, commit_link.commit_id.name)" class="badge text-bg-light" title="View Commit on Github"><i class="fa fa-github"/></a>
+              <a t-att-href="'https://%s/commit/%s' % (commit_link.branch_id.remote_id.base_url, commit_link.commit_id.name)" t-attf-class="badge text-bg-{{match_class}}" title="View Commit on Github"><i class="fa fa-github"/></a>
               <span t-esc="commit_link.commit_id.subject"/>
             </div>
           </div>

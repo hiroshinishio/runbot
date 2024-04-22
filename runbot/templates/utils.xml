@@ -3,7 +3,7 @@
     <data>
         <!-- base layout -->
         <template id="runbot.base_page">
-            <html data-bs-theme="light">
+            <html t-att-data-bs-theme="theme">
                 <head>
                     <title t-esc="title or 'Runbot'"/>
                     <link rel="stylesheet" type="text/css" href="/runbot/static/src/libs/bootstrap/css/bootstrap.css"/>
@@ -34,7 +34,7 @@
                     <header>
                         <nav class="navbar navbar-expand-md bg-body-tertiary">
                             <a t-if="project" t-att-href="qu(search=search)">
-                                <b style="color:#777;">
+                                <b class="active_project">
                                     <t t-esc="project.name"/>
                                 </b>
                             </a>
@@ -58,9 +58,16 @@
                                             <i class="fa fa-gear"/>
                                         </a>
                                         <div class="dropdown-menu" role="menu">
+
                                             <form class="px-4 py-3" method="post" action="/runbot/submit">
+                                                <div class="text-nowrap btn-group btn-group-sm" role="group">
+                                                    <button onclick="document.cookie = 'theme=legacy; expires=Thu, 1 Dec 2942 12:00:00 UTC; path=/'; location.reload();" type="button" class="btn btn-primary">Legacy</button>
+                                                    <button onclick="document.cookie = 'theme=dark; expires=Thu, 1 Dec 2942 12:00:00 UTC; path=/'; location.reload();" type="button" class="btn btn-dark">Dark</button>
+                                                    <button onclick="document.cookie = 'theme=light; expires=Thu, 1 Dec 2942 12:00:00 UTC; path=/'; location.reload();" type="button" class="btn btn-light">Ligh</button>
+                                                </div>
                                                 <input type="hidden" name="save" value="1"/>
                                                 <input type="hidden" name="redirect" t-att-value="current_path"/>
+                                                
                                                 <div class="text-nowrap">
                                                     <input type="checkbox" name="more" id="more" t-att-checked="more"/>
                                                     <label for="more">More info</label>
