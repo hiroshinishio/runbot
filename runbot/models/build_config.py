@@ -256,13 +256,18 @@ class ConfigStep(models.Model):
 
     def _run(self, build):
         build.write({'job_start': now(), 'job_end': False})  # state, ...
-        log_link = ''
-        if self._has_log():
+        log = build._log('run', f'Starting step **{self.name}** from config **{build.params_id.config_id.name}**', log_type='markdown', level='SEPARATOR')
+        result = self._run_step(build)
+        if callable(result):  # docker step, should have text logs
+            if build.log_list:
+                build.log_list = f'{build.log_list},{self.name}'
+            else:
+                build.log_list = self.name
             log_url = f'http://{build.host}'
             url = f"{log_url}/runbot/static/build/{build.dest}/logs/{self.name}.txt"
             log_link = f'[@icon-file-text]({url})'
-        build._log('run', 'Starting step **%s** from config **%s** %s' % (self.name, build.params_id.config_id.name, log_link), log_type='markdown', level='SEPARATOR')
-        return self._run_step(build)
+            log.message = f'{log.message}  {log_link}'
+        return result
 
     def _run_step(self, build, **kwargs):
         build.log_counter = self.env['ir.config_parameter'].sudo().get_param('runbot.runbot_maxlogs', 100)
@@ -336,12 +341,6 @@ class ConfigStep(models.Model):
                 build._kill(result='ko')
             else:
                 raise
-
-    def _is_docker_step(self):
-        if not self:
-            return False
-        self.ensure_one()
-        return self.job_type in ('install_odoo', 'run_odoo', 'restore', 'test_upgrade') or (self.job_type == 'python' and ('docker_params =' in self.python_code or '_run_' in self.python_code or 'cmd' in self.python_code))
 
     def _run_run_odoo(self, build, force=False):
         if not force:
@@ -1112,10 +1111,6 @@ class ConfigStep(models.Model):
         if self.job_type == 'run_odoo' or (self.job_type == 'python' and self.running_job):
             return 'running'
         return 'testing'
-
-    def _has_log(self):
-        self.ensure_one()
-        return self._is_docker_step()
 
     def _check_limits(self, build):
         bundle = build.params_id.create_batch_id.bundle_id

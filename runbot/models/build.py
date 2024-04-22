@@ -181,7 +181,7 @@ class BuildResult(models.Model):
     log_ids = fields.One2many('ir.logging', 'build_id', string='Logs')
     error_log_ids = fields.One2many('ir.logging', 'build_id', domain=[('level', 'in', ['WARNING', 'ERROR', 'CRITICAL'])], string='Error Logs')
     stat_ids = fields.One2many('runbot.build.stat', 'build_id', string='Statistics values')
-    log_list = fields.Char('Comma separted list of step_ids names with logs', compute="_compute_log_list", store=True)
+    log_list = fields.Char('Comma separted list of step_ids names with logs')
 
     active_step = fields.Many2one('runbot.build.config.step', 'Active step')
     job = fields.Char('Active step display name', compute='_compute_job')
@@ -249,12 +249,6 @@ class BuildResult(models.Model):
         get_host = self.env['runbot.host']._get_host
         for record in self:
             record.host_id = get_host(record.host)
-
-    @api.depends('params_id.config_id')
-    def _compute_log_list(self):  # storing this field because it will be access trhoug repo viewn and keep track of the list at create
-        for build in self:
-            build.log_list = ','.join({step.name for step in build.params_id.config_id.step_ids if step._has_log()})
-        # TODO replace logic, add log file to list when executed (avoid 404, link log on docker start, avoid fake is_docker_step)
 
     @api.depends('children_ids.global_state', 'local_state')
     def _compute_global_state(self):
@@ -742,8 +736,8 @@ class BuildResult(models.Model):
                     build._log('_schedule', '%s time exceeded (%ss)' % (build.active_step.name if build.active_step else "?", build.job_time))
                     build._kill(result='killed')
                 return False
-            elif _docker_state in ('UNKNOWN', 'GHOST') and (build.local_state == 'running' or build.active_step._is_docker_step()):  # todo replace with docker_start
-                docker_time = time.time() - dt2time(build.docker_start or build.job_start)
+            elif _docker_state in ('UNKNOWN', 'GHOST') and build.docker_start:
+                docker_time = time.time() - dt2time(build.docker_start)
                 if docker_time < 5:
                     return False
                 elif docker_time < 60:
@@ -984,7 +978,7 @@ class BuildResult(models.Model):
 
         self.ensure_one()
         _logger.info("Build %s %s %s", self.id, func, message)
-        self.env['ir.logging'].create({
+        return self.env['ir.logging'].create({
             'build_id': self.id,
             'level': level,
             'type': log_type,

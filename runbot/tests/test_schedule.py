@@ -28,7 +28,8 @@ class TestSchedule(RunbotCase):
             'host': host.name,
             'job_start': datetime.datetime.now(),
             'active_step': self.env.ref('runbot.runbot_build_config_step_run').id,
-            'params_id': params.id
+            'docker_start': datetime.datetime.now(),
+            'params_id': params.id,
         })
         mock_docker_state.return_value = 'UNKNOWN'
         self.assertEqual(build.local_state, 'testing')
@@ -37,7 +38,7 @@ class TestSchedule(RunbotCase):
         self.assertEqual(build.local_result, 'ok')
 
         self.start_patcher('fetch_local_logs', 'odoo.addons.runbot.models.host.Host._fetch_local_logs', [])  # the local logs have to be empty
-        build.write({'job_start': datetime.datetime.now() - datetime.timedelta(seconds=70)})  # docker never started
+        build.write({'docker_start': datetime.datetime.now() - datetime.timedelta(seconds=70)})  # docker never started
         build._schedule()
         self.assertEqual(build.local_state, 'done')
         self.assertEqual(build.local_result, 'ko')
