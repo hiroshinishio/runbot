@@ -23,6 +23,7 @@
                         <group colspan="4">
                             <field name="all_prs" nolabel="1" readonly="1">
                                 <tree>
+                                    <button type="object" name="get_formview_action" icon="fa-external-link"/>
                                     <field name="display_name"/>
                                     <field name="repository"/>
                                     <field name="state"/>
@@ -34,6 +35,7 @@
                         <group colspan="4">
                             <field name="genealogy_ids" nolabel="1" readonly="1">
                                 <tree decoration-muted="id == parent.id">
+                                    <button type="object" name="get_formview_action" icon="fa-external-link"/>
                                     <field name="name"/>
                                     <field name="target"/>
                                     <field name="all_prs" widget="many2many_tags"/>
@@ -45,6 +47,7 @@
                         <group colspan="4">
                             <field name="staging_ids" nolabel="1" readonly="1">
                                 <tree>
+                                    <button type="object" name="get_formview_action" icon="fa-external-link"/>
                                     <field name="staged_at"/>
                                     <field name="state"/>
                                     <field name="reason"/>
