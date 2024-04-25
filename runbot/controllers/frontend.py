@@ -87,7 +87,7 @@ class Runbot(Controller):
     def submit(self, more=False, redirect='/', keep_search=False, category=False, filter_mode=False, update_triggers=False, **kwargs):
         assert redirect.startswith('/')
         response = werkzeug.utils.redirect(redirect)
-        response.set_cookie('more', '1' if more else '0')
+        response.set_cookie('more', '1' if more else '0', 60 * 60 * 24 * 1000)
         if update_triggers:
             enabled_triggers = []
             project_id = int(update_triggers)
@@ -99,7 +99,7 @@ class Runbot(Controller):
             if len(request.env['runbot.trigger'].search([('project_id', '=', project_id)])) == len(enabled_triggers):
                 response.delete_cookie(key)
             else:
-                response.set_cookie(key, '-'.join(enabled_triggers))
+                response.set_cookie(key, '-'.join(enabled_triggers), 60 * 60 * 24 * 1000)
         return response
 
     @route(['/',
