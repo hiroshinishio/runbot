@@ -256,8 +256,8 @@ class Host(models.Model):
                 elif log_counter < 0:
                     continue
                 else:
-                    if len(ir_log['message']) > 10000:
-                        ir_log['message'] = ir_log['message'][:10000] + "\n ...<message too long, truncated>"
+                    if len(ir_log['message']) > 30000:
+                        ir_log['message'] = ir_log['message'][:30000] + "\n ...<message too long, truncated>"
 
                 ir_log['build_id'] = build.id
                 logs_to_send.append({k:ir_log[k] for k in ir_log if k != 'id'})
