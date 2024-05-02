@@ -195,11 +195,15 @@ class Commit(models.Model):
 class CommitLink(models.Model):
     _name = 'runbot.commit.link'
     _description = "Build commit"
+    _order = 'sequence,repo_id,id'
 
     commit_id = fields.Many2one('runbot.commit', 'Commit', required=True, index=True)
     # Link info
     match_type = fields.Selection([('new', 'New head of branch'), ('head', 'Head of branch'), ('base_head', 'Found on base branch'), ('base_match', 'Found on base branch')])  # HEAD, DEFAULT
     branch_id = fields.Many2one('runbot.branch', string='Found in branch')  # Shouldn't be use for anything else than display
+
+    repo_id = fields.Many2one('runbot.repo', related='commit_id.repo_id', store=True)
+    sequence = fields.Integer('runbot.repo', related='commit_id.repo_id.sequence', store=True)
 
     base_commit_id = fields.Many2one('runbot.commit', 'Base head commit', index=True)
     merge_base_commit_id = fields.Many2one('runbot.commit', 'Merge Base commit', index=True)

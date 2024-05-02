@@ -461,8 +461,8 @@ class TestUpgradeFlow(RunbotCase):
                 self.assertTrue(ro_volumes.pop(f'/home/{user}/.odoorc').startswith(self.env['runbot.runbot']._path('build')))
                 self.assertEqual(
                     list(ro_volumes.keys()), [
-                        '/data/build/addons',
                         '/data/build/server',
+                        '/data/build/addons',
                         '/data/build/upgrade',
                     ],
                     "other commit should have been added automaticaly"
@@ -470,7 +470,7 @@ class TestUpgradeFlow(RunbotCase):
                 self.assertEqual(
                     str(cmd),
                     'python3 server/server.py {addons_path} --no-xmlrpcs --no-netrpc -u all -d {db_name} --stop-after-init --max-cron-threads=0'.format(
-                        addons_path='--addons-path addons,server/addons,server/core/addons',
+                        addons_path='--addons-path server/addons,server/core/addons,addons',
                         db_name=f'{current_build.dest}-{suffix}')
                 )
             self.patchers['docker_run'].side_effect = docker_run_upgrade
