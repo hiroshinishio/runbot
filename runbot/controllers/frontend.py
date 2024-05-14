@@ -655,3 +655,10 @@ class Runbot(Controller):
         bundle.sudo().no_build = bool(value)
         _logger.info('Bundle %s no_build set to %s by %s', bundle.name, bool(value), request.env.user.name)
         return werkzeug.utils.redirect(f'/runbot/bundle/{bundle_id}')
+
+    @route(['/runbot/trigger/report/<model("runbot.trigger"):trigger_id>'], type='http', auth='user', website=True, sitemap=False)
+    def report_view(self, trigger_id=None, **kwargs):
+        return request.render("runbot.trigger_report", {
+            'trigger': trigger_id,
+            'project': trigger_id.project_id,
+        })

@@ -88,6 +88,13 @@ class Trigger(models.Model):
     team_ids = fields.Many2many('runbot.team', string="Runbot Teams", help="Teams responsible of this trigger, mainly usefull for nightly")
     active = fields.Boolean("Active", default=True)
 
+    report_view_id = fields.Many2one('ir.ui.view',
+                                  help="custom view to render result",
+                                  string='Docker Template',
+                                  domain=[('type', '=', 'qweb')],
+                                  context={'default_type': 'qweb', 'default_arch_base': '<t></t>'},
+    )
+
     @api.depends('config_id.step_order_ids.step_id.make_stats')
     def _compute_has_stats(self):
         for trigger in self:

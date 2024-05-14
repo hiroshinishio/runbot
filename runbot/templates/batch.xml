@@ -162,5 +162,12 @@
                 </t>
             </t>
         </template>
+
+        <template id="runbot.trigger_report">
+            <t t-call="runbot.layout">
+                <t t-call="{{trigger.report_view_id.key}}">
+                </t>
+            </t>
+        </template>
     </data>
 </odoo>

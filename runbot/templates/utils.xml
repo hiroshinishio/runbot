@@ -219,6 +219,7 @@
                 <span t-else="" t-attf-class="btn btn-default disabled slot_name">
                     <span t-esc="slot.trigger_id.name"/>
                 </span>
+                <a t-if="slot.trigger_id.report_view_id" title="View last trigger report" t-attf-href="/runbot/trigger/report/{{slot.trigger_id.id}}" class="fa fa-eye btn btn-info"/>
                 <a t-if="bu.local_state == 'running' and bu.database_ids" t-attf-href="/runbot/run/{{bu.id}}" class="fa fa-sign-in btn btn-info"/>
                 <a t-if="bu.static_run" t-att-href="bu.static_run" class="fa fa-sign-in btn btn-info"/>
                 <t t-if="bu" t-call="runbot.build_menu"/>
