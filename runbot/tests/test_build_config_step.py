@@ -618,102 +618,128 @@ class TestMakeResult(RunbotCase):
         super(TestMakeResult, self).setUp()
         self.ConfigStep = self.env['runbot.build.config.step']
         self.Config = self.env['runbot.build.config']
+        self.patchers['getmtime'].return_value = 7200
+        self.logs = []
+        def _log(build, func, message, level='INFO', log_type='runbot', path='runbot'):
+            self.logs.append((level, message))
 
-    @patch('odoo.addons.runbot.models.build_config.os.path.getmtime')
-    @patch('odoo.addons.runbot.models.build.BuildResult._log')
-    def test_make_result(self, mock_log, mock_getmtime):
+        self.start_patcher('log_patcher', 'odoo.addons.runbot.models.build.BuildResult._log', new=_log)
+
+        self.build = self.Build.create({
+            'params_id': self.base_params.id,
+        })
+        self.config_step = self.ConfigStep.create({
+            'name': 'all',
+            'job_type': 'install_odoo',
+            'test_tags': '/module,:class.method',
+        })
+
+    def test_make_result_ok(self):
         file_content = """
 Loading stuff
 odoo.stuff.modules.loading: Modules loaded.
 Some post install stuff
 Initiating shutdown
 """
-        logs = []
-
-        def _log(func, message, level='INFO', log_type='runbot', path='runbot'):
-            logs.append((level, message))
-
-        mock_log.side_effect = _log
-        mock_getmtime.return_value = 7200
-
-        config_step = self.ConfigStep.create({
-            'name': 'all',
-            'job_type': 'install_odoo',
-            'test_tags': '/module,:class.method',
-        })
-        build = self.Build.create({
-            'params_id': self.base_params.id,
-        })
-        logs = []
         with patch('builtins.open', mock_open(read_data=file_content)):
-            config_step._make_results(build)
-        self.assertEqual(str(build.job_end), '1970-01-01 02:00:00')
-        self.assertEqual(logs, [('INFO', 'Getting results for build %s' % build.dest)])
-        self.assertEqual(build.local_result, 'ok')
-        # no shutdown
-        build = self.Build.create({
-            'params_id': self.base_params.id,
-        })
-        logs = []
+            self.config_step._make_results(self.build)
+        self.assertEqual(str(self.build.job_end), '1970-01-01 02:00:00')
+        self.assertEqual(self.logs, [('INFO', 'Getting results for build %s' % self.build.dest)])
+        self.assertEqual(self.build.local_result, 'ok')
+
+    def test_make_result_no_shutdown(self):
         file_content = """
 Loading stuff
 odoo.stuff.modules.loading: Modules loaded.
 Some post install stuff
         """
         with patch('builtins.open', mock_open(read_data=file_content)):
-            config_step._make_results(build)
-        self.assertEqual(str(build.job_end), '1970-01-01 02:00:00')
-        self.assertEqual(build.local_result, 'ko')
-        self.assertEqual(logs, [
-            ('INFO', 'Getting results for build %s' % build.dest),
-            ('ERROR', 'No "Initiating shutdown" found in logs, maybe because of cpu limit.')
+            self.config_step._make_results(self.build)
+        self.assertEqual(str(self.build.job_end), '1970-01-01 02:00:00')
+        self.assertEqual(self.build.local_result, 'ko')
+        self.assertEqual(self.logs, [
+            ('INFO', 'Getting results for build %s' % self.build.dest),
+            ('ERROR', 'No "Initiating shutdown" found in logs, maybe because of cpu limit.'),
         ])
-        # no loaded
-        build = self.Build.create({
-            'params_id': self.base_params.id,
-        })
-        logs = []
+
+    def test_make_result_no_loaded(self):
         file_content = """
 Loading stuff
 """
         with patch('builtins.open', mock_open(read_data=file_content)):
-            config_step._make_results(build)
-        self.assertEqual(str(build.job_end), '1970-01-01 02:00:00')
-        self.assertEqual(build.local_result, 'ko')
-        self.assertEqual(logs, [
-            ('INFO', 'Getting results for build %s' % build.dest),
-            ('ERROR', 'Modules loaded not found in logs')
+            self.config_step._make_results(self.build)
+        self.assertEqual(str(self.build.job_end), '1970-01-01 02:00:00')
+        self.assertEqual(self.build.local_result, 'ko')
+        self.assertEqual(self.logs, [
+            ('INFO', 'Getting results for build %s' % self.build.dest),
+            ('ERROR', 'Modules loaded not found in logs'),
         ])
 
-        # traceback
-        build = self.Build.create({
-            'params_id': self.base_params.id,
-        })
-        logs = []
+    def test_make_result_traceback(self):
+        file_content = """
+Loading stuff
+Traceback (most recent call last):
+  File "/data/build/odoo/odoo-bin", line 5, in <module>
+    import odoo
+  File "/data/build/odoo/odoo/__init__.py", line 134, in <module>
+    from . import modules
+  File "/data/build/odoo/odoo/modules/__init__.py", line 8, in <module>
+    from . import db, graph, loading, migration, module, registry, neutralize
+  File "/data/build/odoo/odoo/modules/graph.py", line 11, in <module>
+    import odoo.tools as tools
+  File "/data/build/odoo/odoo/tools/__init__.py", line 25, in <module>
+    from .mail import *
+  File "/data/build/odoo/odoo/tools/mail.py", line 32, in <module>
+    safe_attrs = clean.defs.safe_attrs | frozenset(
+AttributeError: module 'lxml.html.clean' has no attribute 'defs'
+2024-05-14 09:54:22,692 17 INFO dbname path.to.test: aaa
+"""
+        with patch('builtins.open', mock_open(read_data=file_content)):
+            self.config_step._make_results(self.build)
+        self.assertEqual(str(self.build.job_end), '1970-01-01 02:00:00')
+        self.assertEqual(self.build.local_result, 'ko')
+        expected = """Traceback found in logs:
+Traceback (most recent call last):
+  File "/data/build/odoo/odoo-bin", line 5, in <module>
+    import odoo
+  File "/data/build/odoo/odoo/__init__.py", line 134, in <module>
+    from . import modules
+  File "/data/build/odoo/odoo/modules/__init__.py", line 8, in <module>
+    from . import db, graph, loading, migration, module, registry, neutralize
+  File "/data/build/odoo/odoo/modules/graph.py", line 11, in <module>
+    import odoo.tools as tools
+  File "/data/build/odoo/odoo/tools/__init__.py", line 25, in <module>
+    from .mail import *
+  File "/data/build/odoo/odoo/tools/mail.py", line 32, in <module>
+    safe_attrs = clean.defs.safe_attrs | frozenset(
+AttributeError: module 'lxml.html.clean' has no attribute 'defs'"""
+        self.assertEqual(self.logs, [
+            ('INFO', 'Getting results for build %s' % self.build.dest),
+            ('ERROR', expected),
+        ])
+
+    def test_make_result_error(self):
         file_content = """
 Loading stuff
 odoo.stuff.modules.loading: Modules loaded.
 Some post install stuff
-2019-12-17 17:34:37,692 17 ERROR dbname path.to.test: FAIL: TestClass.test_
-Traceback (most recent call last):
-File "x.py", line a, in test_
-    ....
+2024-05-14 09:54:22,692 17 ERROR dbname path.to.test: FAIL: TestClass.test_
+Some log
+2024-05-14 09:54:22,692 17 ERROR dbname path.to.test: FAIL: TestClass.test2_
 Initiating shutdown
 """
         with patch('builtins.open', mock_open(read_data=file_content)):
-            config_step._make_results(build)
-        self.assertEqual(str(build.job_end), '1970-01-01 02:00:00')
-        self.assertEqual(build.local_result, 'ko')
-        self.assertEqual(logs, [
-            ('INFO', 'Getting results for build %s' % build.dest),
-            ('ERROR', 'Error or traceback found in logs')
+            self.config_step._make_results(self.build)
+        self.assertEqual(str(self.build.job_end), '1970-01-01 02:00:00')
+        self.assertEqual(self.build.local_result, 'ko')
+        self.assertEqual(self.logs, [
+            ('INFO', 'Getting results for build %s' % self.build.dest),
+            ('ERROR', """Error found in logs:
+2024-05-14 09:54:22,692 17 ERROR dbname path.to.test: FAIL: TestClass.test_
+2024-05-14 09:54:22,692 17 ERROR dbname path.to.test: FAIL: TestClass.test2_"""),
         ])
 
-        # warning in logs
-        build = self.Build.create({
-            'params_id': self.base_params.id,
-        })
-        logs = []
+    def test_make_result_warning(self):
         file_content = """
 Loading stuff
 odoo.stuff.modules.loading: Modules loaded.
@@ -722,30 +748,26 @@ Some post install stuff
 Initiating shutdown
 """
         with patch('builtins.open', mock_open(read_data=file_content)):
-            config_step._make_results(build)
-        self.assertEqual(str(build.job_end), '1970-01-01 02:00:00')
-        self.assertEqual(build.local_result, 'warn')
-        self.assertEqual(logs, [
-            ('INFO', 'Getting results for build %s' % build.dest),
+            self.config_step._make_results(self.build)
+        self.assertEqual(str(self.build.job_end), '1970-01-01 02:00:00')
+        self.assertEqual(self.build.local_result, 'warn')
+        self.assertEqual(self.logs, [
+            ('INFO', 'Getting results for build %s' % self.build.dest),
             ('WARNING', 'Warning found in logs')
         ])
 
         # no log file
-        logs = []
+        self.logs = []
         self.patchers['isfile'].return_value = False
-        config_step._make_results(build)
+        self.config_step._make_results(self.build)
 
-        self.assertEqual(build.local_result, 'ko')
-        self.assertEqual(logs, [
-            ('INFO', 'Getting results for build %s' % build.dest),
+        self.assertEqual(self.build.local_result, 'ko')
+        self.assertEqual(self.logs, [
+            ('INFO', 'Getting results for build %s' % self.build.dest),
             ('ERROR', 'Log file not found at the end of test job')
         ])
 
-        # no error but build was already in warn
-        build = self.Build.create({
-            'params_id': self.base_params.id,
-        })
-        logs = []
+    def test_make_result_already_warn(self):
         file_content = """
 Loading stuff
 odoo.stuff.modules.loading: Modules loaded.
@@ -753,17 +775,18 @@ Some post install stuff
 Initiating shutdown
 """
         self.patchers['isfile'].return_value = True
-        build.local_result = 'warn'
+        self.build.local_result = 'warn'
         with patch('builtins.open', mock_open(read_data=file_content)):
-            config_step._make_results(build)
-        self.assertEqual(logs, [
-            ('INFO', 'Getting results for build %s' % build.dest)
+            self.config_step._make_results(self.build)
+        self.assertEqual(self.logs, [
+            ('INFO', 'Getting results for build %s' % self.build.dest)
         ])
-        self.assertEqual(str(build.job_end), '1970-01-01 02:00:00')
-        self.assertEqual(build.local_result, 'warn')
+        self.assertEqual(str(self.build.job_end), '1970-01-01 02:00:00')
+        self.assertEqual(self.build.local_result, 'warn')
 
-    @patch('odoo.addons.runbot.models.build_config.ConfigStep._make_tests_results')
-    def test_make_python_result(self, mock_make_tests_results):
+
+    @patch('odoo.addons.runbot.models.build_config.ConfigStep._make_odoo_results')
+    def test_make_python_result(self, mock_make_odoo_results):
         config_step = self.ConfigStep.create({
             'name': 'all',
             'job_type': 'python',
@@ -785,7 +808,10 @@ Initiating shutdown
 
         # no result defined
         config_step.python_result_code = ""
-        mock_make_tests_results.return_value = {'local_result': 'warn'}
+        def make_warn(build):
+            build.local_result = "warn"
+
+        mock_make_odoo_results.side_effect = make_warn
         config_step._make_results(build)
         self.assertEqual(build.local_result, 'warn')
 

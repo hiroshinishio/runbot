@@ -90,7 +90,7 @@ class Trigger(models.Model):
 
     report_view_id = fields.Many2one('ir.ui.view',
                                   help="custom view to render result",
-                                  string='Docker Template',
+                                  string='Report view',
                                   domain=[('type', '=', 'qweb')],
                                   context={'default_type': 'qweb', 'default_arch_base': '<t></t>'},
     )

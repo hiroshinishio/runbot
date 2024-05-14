@@ -23,7 +23,6 @@ _SAFE_OPCODES |= set(to_opcodes(['LOAD_DEREF', 'STORE_DEREF', 'LOAD_CLOSURE']))
 
 _logger = logging.getLogger(__name__)
 
-_re_error = r'^(?:\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3} \d+ (?:ERROR|CRITICAL) )|(?:Traceback \(most recent call last\):)$'
 _re_warning = r'^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3} \d+ WARNING '
 
 PYTHON_DEFAULT = "# type python code here\n\n\n\n\n\n"
@@ -926,17 +925,19 @@ class ConfigStep(models.Model):
         log_time = self._get_log_last_write(build)
         if log_time:
             build.job_end = log_time
-        if self.job_type == 'python' and self.python_result_code and self.python_result_code != PYTHON_DEFAULT:
-            build.write(self._make_python_results(build))
-        elif self.job_type in ['install_odoo', 'python']:
+        if self.job_type == 'python':
+            if self.python_result_code and self.python_result_code != PYTHON_DEFAULT:
+                self._make_python_results(build)
+            elif self.test_enable or self.test_tags:
+                self._make_odoo_results(build)
+        elif self.job_type == 'install_odoo':
             if self.coverage:
                 build.write(self._make_coverage_results(build))
-            if self.test_enable or self.test_tags:
-                build.write(self._make_tests_results(build))
+            self._make_odoo_results(build)
         elif self.job_type == 'test_upgrade':
-            build.write(self._make_upgrade_results(build))
+            self._make_upgrade_results(build)
         elif self.job_type == 'restore':
-            build.write(self._make_restore_results(build))
+            self._make_restore_results(build)
 
     def _make_python_results(self, build):
         eval_ctx = self._make_python_ctx(build)
@@ -945,7 +946,7 @@ class ConfigStep(models.Model):
         # todo check return_value or write in try except. Example: local result setted to wrong value
         if not isinstance(return_value, dict):
             raise RunbotException('python_result_code must set return_value to a dict values on build')
-        return return_value
+        build.write(return_value)  # old style support
 
     def _make_coverage_results(self, build):
         build_values = {}
@@ -965,22 +966,18 @@ class ConfigStep(models.Model):
         return build_values
 
     def _make_upgrade_results(self, build):
-        build_values = {}
         build._log('upgrade', 'Getting results for build %s' % build.dest)
 
         if build.local_result != 'ko':
             checkers = [
                 self._check_log,
-                self._check_module_loaded,
                 self._check_error,
+                self._check_module_loaded,
                 self._check_module_states,
                 self._check_build_ended,
                 self._check_warning,
             ]
-            local_result = self._get_checkers_result(build, checkers)
-            build_values['local_result'] = build._get_worst_result([build.local_result, local_result])
-
-        return build_values
+            build.local_result = self._get_checkers_result(build, checkers)
 
     def _check_module_states(self, build):
         if not build._is_file('logs/modules_states.txt'):
@@ -1009,9 +1006,18 @@ class ConfigStep(models.Model):
 
     def _check_error(self, build, regex=None):
         log_path = build._path('logs', '%s.txt' % self.name)
-        regex = regex or _re_error
-        if rfind(log_path, regex):
-            build._log('_make_tests_results', 'Error or traceback found in logs', level="ERROR")
+        re_error = regex or r'^(?:\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3} \d+ (?:ERROR|CRITICAL) .*)$'
+
+        if result := rfind(log_path, re_error):
+            build._log('_make_tests_results', 'Error found in logs:\n%s' % '\n'.join(result), level="ERROR")
+            return 'ko'
+
+        re_traceback = r'^(?:Traceback \(most recent call last\):)$'
+        if result := rfind(log_path, re_traceback):
+            # find Traceback, all following indented lines and one last non indented line
+            complete_traceback = rfind(log_path, r'^(?:Traceback \(most recent call last\):(?:\n .*)*(?:\n.*)?)')[:10000]
+            complete_traceback = complete_traceback or result
+            build._log('_make_tests_results', 'Traceback found in logs:\n%s' % '\n'.join(complete_traceback), level="ERROR")
             return 'ko'
         return 'ok'
 
@@ -1049,34 +1055,28 @@ class ConfigStep(models.Model):
                 return result
         return 'ok'
 
-    def _make_tests_results(self, build):
-        build_values = {}
+    def _make_odoo_results(self, build):
         build._log('run', 'Getting results for build %s' % build.dest)
 
         if build.local_result != 'ko':
             checkers = [
                 self._check_log,
-                self._check_module_loaded,
                 self._check_error,
-                self._check_build_ended
+                self._check_module_loaded,
+                self._check_build_ended,
             ]
             if build.local_result != 'warn':
                 checkers.append(self._check_warning)
 
-            local_result = self._get_checkers_result(build, checkers)
-            build_values['local_result'] = build._get_worst_result([build.local_result, local_result])
-        return build_values
+            build.local_result = self._get_checkers_result(build, checkers)
 
     def _make_restore_results(self, build):
-        build_values = {}
         if build.local_result != 'warn':
             checkers = [
                 self._check_log,
                 self._check_restore_ended
             ]
-            local_result = self._get_checkers_result(build, checkers)
-            build_values['local_result'] = build._get_worst_result([build.local_result, local_result])
-        return build_values
+            build.local_result = self._get_checkers_result(build, checkers)
 
     def _make_stats(self, build):
         if not self.make_stats:  # TODO garbage collect non sticky stat

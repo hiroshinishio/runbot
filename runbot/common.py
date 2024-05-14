@@ -70,8 +70,8 @@ def rfind(filename, pattern):
     if os.path.isfile(filename):
         regexp = re.compile(pattern, re.M)
         with file_open(filename, 'r') as f:
-            if regexp.findall(f.read()):
-                return True
+            result = regexp.findall(f.read())
+            return result or False
     return False
 
 
