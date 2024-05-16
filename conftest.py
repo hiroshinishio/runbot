@@ -1,4 +1,7 @@
-# -*- coding: utf-8 -*-
+from __future__ import annotations
+
+from typing import Optional
+
 """
 Configuration:
 
@@ -614,7 +617,7 @@ class Repo:
         assert res['object']['type'] == 'commit'
         return res['object']['sha']
 
-    def commit(self, ref):
+    def commit(self, ref: str) -> Commit:
         if not re.match(r'[0-9a-f]{40}', ref):
             if not ref.startswith(('heads/', 'refs/heads/')):
                 ref = 'refs/heads/' + ref
@@ -625,12 +628,11 @@ class Repo:
             ref = 'refs/' + ref
 
         r = self._session.get('https://api.github.com/repos/{}/commits/{}'.format(self.name, ref))
-        response = r.json()
-        assert 200 <= r.status_code < 300, response
+        assert 200 <= r.status_code < 300, r.json()
 
-        return self._commit_from_gh(response)
+        return self._commit_from_gh(r.json())
 
-    def _commit_from_gh(self, gh_commit):
+    def _commit_from_gh(self, gh_commit: dict) -> Commit:
         c = gh_commit['commit']
         return Commit(
             id=gh_commit['sha'],
@@ -788,7 +790,16 @@ class Repo:
         )).raise_for_status()
         return PR(self, number)
 
-    def make_pr(self, *, title=None, body=None, target, head, draft=False, token=None):
+    def make_pr(
+            self,
+            *,
+            title: Optional[str] = None,
+            body: Optional[str] = None,
+            target: str,
+            head: str,
+            draft: bool = False,
+            token: Optional[str] = None
+    ) -> PR:
         assert self.hook
         self.hook = 2
 
@@ -821,10 +832,9 @@ class Repo:
             },
             headers=headers,
         )
-        pr = r.json()
-        assert 200 <= r.status_code < 300, pr
+        assert 200 <= r.status_code < 300, r.json()
 
-        return PR(self, pr['number'])
+        return PR(self, r.json()['number'])
 
     def post_status(self, ref, status, context='default', **kw):
         assert self.hook
