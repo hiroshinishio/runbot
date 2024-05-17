@@ -8,13 +8,12 @@ import os
 import re
 from collections.abc import Mapping
 from difflib import Differ
-from itertools import takewhile
 from operator import itemgetter
 from typing import Dict, Union, Optional, Literal, Callable, Iterator, Tuple, List, TypeAlias
 
 from werkzeug.datastructures import Headers
 
-from odoo import api, models, fields
+from odoo import api, models, fields, Command
 from odoo.tools import OrderedSet, groupby
 from .pull_requests import Branch, Stagings, PullRequests, Repository
 from .batch import Batch
@@ -166,7 +165,7 @@ For-Commit-Id: {it.head}
     # create actual staging object
     st: Stagings = env['runbot_merge.stagings'].create({
         'target': branch.id,
-        'batch_ids': [(4, batch.id, 0) for batch in staged],
+        'staging_batch_ids': [Command.create({'runbot_merge_batch_id': batch.id}) for batch in staged],
         'heads': heads,
         'commits': commits,
     })

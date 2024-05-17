@@ -1763,7 +1763,8 @@ class Stagings(models.Model):
 
     target = fields.Many2one('runbot_merge.branch', required=True, index=True)
 
-    batch_ids = fields.Many2many('runbot_merge.batch', context={'active_test': False})
+    staging_batch_ids = fields.One2many('runbot_merge.staging.batch', 'runbot_merge_stagings_id')
+    batch_ids = fields.Many2many('runbot_merge.batch', context={'active_test': False}, compute="_compute_batch_ids")
     pr_ids = fields.One2many('runbot_merge.pull_requests', compute='_compute_prs')
     state = fields.Selection([
         ('success', 'Success'),
@@ -1813,6 +1814,11 @@ class Stagings(models.Model):
             ))
             for staging in self
         ]
+
+    @api.depends('staging_batch_ids.runbot_merge_batch_id')
+    def _compute_batch_ids(self):
+        for staging in self:
+            staging.batch_ids = staging.staging_batch_ids.runbot_merge_batch_id
 
     @api.depends('heads')
     def _compute_statuses(self):

@@ -9,6 +9,7 @@ from collections import defaultdict
 from collections.abc import Iterator
 
 import requests
+from psycopg2 import sql
 
 from odoo import models, fields, api
 from .utils import enum
@@ -16,6 +17,28 @@ from .utils import enum
 
 _logger = logging.getLogger(__name__)
 FOOTER = '\nMore info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port\n'
+
+
+class StagingBatch(models.Model):
+    _name = 'runbot_merge.staging.batch'
+    _description = "link between batches and staging in order to maintain an " \
+                   "ordering relationship between the batches of a staging"
+    _log_access = False
+    _order = 'id'
+
+    runbot_merge_batch_id = fields.Many2one('runbot_merge.batch', required=True)
+    runbot_merge_stagings_id = fields.Many2one('runbot_merge.stagings', required=True)
+
+    def init(self):
+        super().init()
+
+        self.env.cr.execute(sql.SQL("""
+        CREATE UNIQUE INDEX IF NOT EXISTS runbot_merge_staging_batch_idx
+            ON {table} (runbot_merge_stagings_id, runbot_merge_batch_id);
+
+        CREATE INDEX IF NOT EXISTS runbot_merge_staging_batch_rev
+            ON {table} (runbot_merge_batch_id) INCLUDE (runbot_merge_stagings_id);
+        """).format(table=sql.Identifier(self._table)))
 
 
 class Batch(models.Model):
@@ -31,7 +54,12 @@ class Batch(models.Model):
     _parent_store = True
 
     target = fields.Many2one('runbot_merge.branch', store=True, compute='_compute_target')
-    staging_ids = fields.Many2many('runbot_merge.stagings')
+    batch_staging_ids = fields.One2many('runbot_merge.staging.batch', 'runbot_merge_batch_id')
+    staging_ids = fields.Many2many(
+        'runbot_merge.stagings',
+        compute="_compute_staging_ids",
+        context={'active_test': False},
+    )
     split_id = fields.Many2one('runbot_merge.split', index=True)
 
     prs = fields.One2many('runbot_merge.pull_requests', 'batch_id')
@@ -73,6 +101,11 @@ class Batch(models.Model):
         compute="_compute_genealogy",
         context={"active_test": False},
     )
+
+    @api.depends('batch_staging_ids.runbot_merge_stagings_id')
+    def _compute_staging_ids(self):
+        for batch in self:
+            batch.staging_ids = batch.batch_staging_ids.runbot_merge_stagings_id
 
     @property
     def source(self):
@@ -451,6 +484,10 @@ class Batch(models.Model):
                 tip._schedule_fp_followup()
 
         return True
+
+    @api.ondelete(at_uninstall=True)
+    def _on_delete_clear_stagings(self):
+        self.batch_staging_ids.unlink()
 
     def unlink(self):
         """

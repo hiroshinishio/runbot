@@ -2784,6 +2784,11 @@ class TestBatching(object):
 
         staging = ensure_one(env['runbot_merge.stagings'].search([]))
         assert staging.pr_ids == pr11 | pr12 | pr21
+        assert list(staging.batch_ids) == [
+            pr11.batch_id,
+            pr12.batch_id,
+            pr21.batch_id,
+        ]
         assert not pr22.staging_id
 
     def test_batching_urgent(self, env, repo, config):
@@ -2804,6 +2809,10 @@ class TestBatching(object):
         staging_1 = sm_all.staging_id
         assert staging_1
         assert len(staging_1) == 1
+        assert list(staging_1.batch_ids) == [
+            p_11.batch_id,
+            p_12.batch_id,
+        ]
 
         # no statuses run on PR0s
         with repo:
