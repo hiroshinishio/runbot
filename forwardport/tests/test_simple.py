@@ -1052,9 +1052,6 @@ class TestRecognizeCommands:
         [a] = env['runbot_merge.branch'].search([
             ('name', '=', 'a')
         ])
-        [c] = env['runbot_merge.branch'].search([
-            ('name', '=', 'c')
-        ])
 
         names = [
             "hansen",
@@ -1064,12 +1061,12 @@ class TestRecognizeCommands:
         ]
 
         for n in names:
-            assert pr_id.limit_id == c
+            assert not pr_id.limit_id
             with repo:
                 pr.post_comment(f'@{n} up to a', config['role_reviewer']['token'])
             assert pr_id.limit_id == a
             # reset state
-            pr_id.write({'limit_id': c.id})
+            pr_id.limit_id = False
 
     # FIXME: remove / merge into mergebot tests
     @pytest.mark.parametrize('indent', ['', '\N{SPACE}', '\N{SPACE}'*4, '\N{TAB}'])
@@ -1081,11 +1078,8 @@ class TestRecognizeCommands:
         [a] = env['runbot_merge.branch'].search([
             ('name', '=', 'a')
         ])
-        [c] = env['runbot_merge.branch'].search([
-            ('name', '=', 'c')
-        ])
 
-        assert pr_id.limit_id == c
+        assert not pr_id.limit_id
         with repo:
             pr.post_comment(f'{indent}@hansen up to a', config['role_reviewer']['token'])
         assert pr_id.limit_id == a

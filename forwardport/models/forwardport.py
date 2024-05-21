@@ -82,25 +82,28 @@ class ForwardPortTasks(models.Model, Queue):
     def _process_item(self):
         batch = self.batch_id
         sentry_sdk.set_tag('forward-porting', batch.prs.mapped('display_name'))
-        newbatch = batch.prs._port_forward()
+        newbatch = batch._port_forward()
 
         if not newbatch:  # reached end of seq (or batch is empty)
             # FIXME: or configuration is fucky so doesn't want to FP (maybe should error and retry?)
             _logger.info(
-                "Processed %s (from %s): %s (%s) -> end of the sequence",
-                self.id, self.source,
-                batch, batch.prs
+                "Processed %s from %s (%s) -> end of the sequence",
+                batch, self.source, batch.prs.mapped('display_name'),
             )
             return
 
         _logger.info(
-            "Processed %s (from %s): %s (%s) -> %s (%s)",
-            self.id, self.source,
-            batch, batch.prs,
-            newbatch, newbatch.prs,
+            "Processed %s from %s (%s) -> %s (%s)",
+            batch, self.source, ', '.join(batch.prs.mapped('display_name')),
+            newbatch, ', '.join(newbatch.prs.mapped('display_name')),
         )
-        # insert new batch in ancestry sequence unless conflict (= no parent)
+        # insert new batch in ancestry sequence
         if self.source == 'insert':
+            self.env['runbot_merge.batch'].search([
+                ('parent_id', '=', batch.id),
+                ('id', '!=', newbatch.id),
+            ]).parent_id = newbatch.id
+            # insert new PRs in ancestry sequence unless conflict (= no parent)
             for pr in newbatch.prs:
                 if not pr.parent_id:
                     break

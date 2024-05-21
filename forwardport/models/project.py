@@ -11,39 +11,28 @@ means PR creation is trickier (as mergebot assumes opened event will always
 lead to PR creation but fpbot wants to attach meaning to the PR when setting
 it up), ...
 """
-import ast
-import base64
-import contextlib
 import datetime
 import itertools
 import json
 import logging
 import operator
-import os
-import re
 import subprocess
 import tempfile
 import typing
-from operator import itemgetter
 from pathlib import Path
 
 import dateutil.relativedelta
-import psycopg2.errors
 import requests
 
 from odoo import models, fields, api
-from odoo.osv import expression
 from odoo.exceptions import UserError
-from odoo.tools.misc import topological_sort, groupby, Reverse
-from odoo.tools.sql import reverse_order
+from odoo.tools.misc import topological_sort, groupby
 from odoo.tools.appdirs import user_cache_dir
 from odoo.addons.base.models.res_partner import Partner
 from odoo.addons.runbot_merge import git
 from odoo.addons.runbot_merge.models.pull_requests import Branch
 from odoo.addons.runbot_merge.models.stagings_create import Message
 
-
-footer = '\nMore info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port\n'
 
 DEFAULT_DELTA = dateutil.relativedelta.relativedelta(days=3)
 
@@ -72,7 +61,7 @@ class Project(models.Model):
         because no CI or CI failed), create followup, as if the branch had been
         originally disabled (and thus skipped over)
         """
-        PRs = self.env['runbot_merge.pull_requests']
+        Batch = self.env['runbot_merge.batch']
         for p in self:
             actives = previously_active_branches[p]
             for deactivated in p.branch_ids.filtered(lambda b: not b.active) & actives:
@@ -80,26 +69,27 @@ class Project(models.Model):
                 # and it doesn't have a child (e.g. CI failed), enqueue a forward
                 # port as if the now deactivated branch had been skipped over (which
                 # is the normal fw behaviour)
-                extant = PRs.search([
+                extant = Batch.search([
                     ('target', '=', deactivated.id),
-                    ('source_id.limit_id', '!=', deactivated.id),
-                    ('state', 'not in', ('closed', 'merged')),
+                    # FIXME: this should probably be *all* the PRs of the batch
+                    ('prs.limit_id', '!=', deactivated.id),
+                    ('merge_date', '=', False),
                 ])
-                for p in extant.with_context(force_fw=True):
-                    next_target = p.source_id._find_next_target(p)
+                for b in extant.with_context(force_fw=True):
+                    next_target = b._find_next_target()
                     # should not happen since we already filtered out limits
                     if not next_target:
                         continue
 
                     # check if it has a descendant in the next branch, if so skip
-                    if PRs.search_count([
-                        ('source_id', '=', p.source_id.id),
+                    if Batch.search_count([
+                        ('parent_id', '=', b.id),
                         ('target', '=', next_target.id)
                     ]):
                         continue
 
                     # otherwise enqueue a followup
-                    p._schedule_fp_followup()
+                    b._schedule_fp_followup()
 
     def _insert_intermediate_prs(self, branches_before):
         """If new branches have been added to the sequence inbetween existing
@@ -161,13 +151,6 @@ class Project(models.Model):
                     'source': 'insert',
                 })
 
-    def _forward_port_ordered(self, domain=()):
-        Branches = self.env['runbot_merge.branch']
-        return Branches.search(expression.AND([
-            [('project_id', '=', self.id)],
-            domain or [],
-        ]), order=reverse_order(Branches._order))
-
 class Repository(models.Model):
     _inherit = 'runbot_merge.repository'
 
@@ -201,12 +184,6 @@ class PullRequests(models.Model):
         if existing:
             return existing
 
-        if 'limit_id' not in vals:
-            branch = self.env['runbot_merge.branch'].browse(vals['target'])
-            repo = self.env['runbot_merge.repository'].browse(vals['repository'])
-            vals['limit_id'] = branch.project_id._forward_port_ordered(
-                ast.literal_eval(repo.branch_filter or '[]')
-            )[-1].id
         if vals.get('parent_id') and 'source_id' not in vals:
             vals['source_id'] = self.browse(vals['parent_id']).root_id.id
         return super().create(vals)
@@ -273,96 +250,6 @@ class PullRequests(models.Model):
             })
         return r
 
-    def _maybe_update_limit(self, limit: str) -> typing.Tuple[bool, str]:
-        limit_id = self.env['runbot_merge.branch'].with_context(active_test=False).search([
-            ('project_id', '=', self.repository.project_id.id),
-            ('name', '=', limit),
-        ])
-        if not limit_id:
-            return True, f"there is no branch {limit!r}, it can't be used as a forward port target."
-
-        if limit_id != self.target and not limit_id.active:
-            return True, f"branch {limit_id.name!r} is disabled, it can't be used as a forward port target."
-
-        # not forward ported yet, just acknowledge the request
-        if not self.source_id and self.state != 'merged':
-            self.limit_id = limit_id
-            if branch_key(limit_id) <= branch_key(self.target):
-                return False, "Forward-port disabled."
-            else:
-                return False, f"Forward-porting to {limit_id.name!r}."
-
-        # if the PR has been forwardported
-        prs = (self | self.forwardport_ids | self.source_id | self.source_id.forwardport_ids)
-        tip = max(prs, key=pr_key)
-        # if the fp tip was closed it's fine
-        if tip.state == 'closed':
-            return True, f"{tip.display_name} is closed, no forward porting is going on"
-
-        prs.limit_id = limit_id
-
-        real_limit = max(limit_id, tip.target, key=branch_key)
-
-        addendum = ''
-        # check if tip was queued for forward porting, try to cancel if we're
-        # supposed to stop here
-        if real_limit == tip.target and (task := self.env['forwardport.batches'].search([('batch_id', '=', tip.batch_id.id)])):
-            try:
-                with self.env.cr.savepoint():
-                    self.env.cr.execute(
-                        "SELECT FROM forwardport_batches "
-                        "WHERE id = %s FOR UPDATE NOWAIT",
-                        [task.id])
-            except psycopg2.errors.LockNotAvailable:
-                # row locked = port occurring and probably going to succeed,
-                # so next(real_limit) likely a done deal already
-                return True, (
-                    f"Forward port of {tip.display_name} likely already "
-                    f"ongoing, unable to cancel, close next forward port "
-                    f"when it completes.")
-            else:
-                self.env.cr.execute("DELETE FROM forwardport_batches WHERE id = %s", [task.id])
-
-        if real_limit != tip.target:
-            # forward porting was previously stopped at tip, and we want it to
-            # resume
-            if tip.state == 'merged':
-                self.env['forwardport.batches'].create({
-                    'batch_id': tip.batch_id.id,
-                    'source': 'fp' if tip.parent_id else 'merge',
-                })
-                resumed = tip
-            else:
-                resumed = tip._schedule_fp_followup()
-            if resumed:
-                addendum += f', resuming forward-port stopped at {tip.display_name}'
-
-        if real_limit != limit_id:
-            addendum += f' (instead of the requested {limit_id.name!r} because {tip.display_name} already exists)'
-
-        # get a "stable" root rather than self's to avoid divertences between
-        # PRs across a root divide (where one post-root would point to the root,
-        # and one pre-root would point to the source, or a previous root)
-        root = tip.root_id
-        # reference the root being forward ported unless we are the root
-        root_ref = '' if root == self else f' {root.display_name}'
-        msg = f"Forward-porting{root_ref} to {real_limit.name!r}{addendum}."
-        # send a message to the source & root except for self, if they exist
-        root_msg = f'Forward-porting to {real_limit.name!r} (from {self.display_name}).'
-        self.env['runbot_merge.pull_requests.feedback'].create([
-            {
-                'repository': p.repository.id,
-                'pull_request': p.number,
-                'message': root_msg,
-                'token_field': 'fp_github_token',
-            }
-            # send messages to source and root unless root is self (as it
-            # already gets the normal message)
-            for p in (self.source_id | root) - self
-        ])
-
-        return False, msg
-
     def _notify_ci_failed(self, ci):
         # only care about FP PRs which are not staged / merged yet
         # NB: probably ignore approved PRs as normal message will handle them?
@@ -378,88 +265,8 @@ class PullRequests(models.Model):
 
     def _validate(self, statuses):
         failed = super()._validate(statuses)
-        self._schedule_fp_followup()
+        self.batch_id._schedule_fp_followup()
         return failed
-
-    def _schedule_fp_followup(self):
-        _logger = logging.getLogger(__name__).getChild('forwardport.next')
-        # if the PR has a parent and is CI-validated, enqueue the next PR
-        scheduled = self.browse(())
-        for pr in self:
-            _logger.info('Checking if forward-port %s (%s)', pr.display_name, pr)
-            if not pr.parent_id:
-                _logger.info('-> no parent %s (%s)', pr.display_name, pr.parent_id)
-                continue
-            if not self.env.context.get('force_fw') and self.source_id.batch_id.fw_policy != 'skipci' and pr.state not in ['validated', 'ready']:
-                _logger.info('-> wrong state %s (%s)', pr.display_name, pr.state)
-                continue
-
-            # check if we've already forward-ported this branch
-            source = pr.source_id or pr
-            next_target = source._find_next_target(pr)
-            if not next_target:
-                _logger.info("-> forward port done (no next target)")
-                continue
-
-            if n := self.search([
-                ('source_id', '=', source.id),
-                ('target', '=', next_target.id),
-            ], limit=1):
-                _logger.info('-> already forward-ported (%s)', n.display_name)
-                continue
-
-            batch = pr.batch_id
-            # otherwise check if we already have a pending forward port
-            _logger.info("%s %s %s", pr.display_name, batch, ', '.join(batch.mapped('prs.display_name')))
-            if self.env['forwardport.batches'].search_count([('batch_id', '=', batch.id)]):
-                _logger.warning('-> already recorded')
-                continue
-
-            # check if batch-mate are all valid
-            mates = batch.prs
-            # wait until all of them are validated or ready
-            if not self.env.context.get('force_fw') and any(pr.source_id.batch_id.fw_policy != 'skipci' and pr.state not in ('validated', 'ready') for pr in mates):
-                _logger.info("-> not ready (%s)", [(pr.display_name, pr.state) for pr in mates])
-                continue
-
-            # check that there's no weird-ass state
-            if not all(pr.parent_id for pr in mates):
-                _logger.warning("Found a batch (%s) with only some PRs having parents, ignoring", mates)
-                continue
-            if self.search_count([('parent_id', 'in', mates.ids)]):
-                _logger.warning("Found a batch (%s) with only some of the PRs having children", mates)
-                continue
-
-            _logger.info('-> ok')
-            self.env['forwardport.batches'].create({
-                'batch_id': batch.id,
-                'source': 'fp',
-            })
-            scheduled |= pr
-        return scheduled
-
-    def _find_next_target(self, reference):
-        """ Finds the branch between target and limit_id which follows
-        reference
-        """
-        if reference.target == self.limit_id:
-            return
-        # NOTE: assumes even disabled branches are properly sequenced, would
-        #       probably be a good idea to have the FP view show all branches
-        branches = list(self.target.project_id
-            .with_context(active_test=False)
-            ._forward_port_ordered(ast.literal_eval(self.repository.branch_filter or '[]')))
-
-        # get all branches between max(root.target, ref.target) (excluded) and limit (included)
-        from_ = max(branches.index(self.target), branches.index(reference.target))
-        to_ = branches.index(self.limit_id)
-
-        # return the first active branch in the set
-        return next((
-            branch
-            for branch in branches[from_+1:to_+1]
-            if branch.active
-        ), None)
 
     def _commits_lazy(self):
         s = requests.Session()
@@ -489,216 +296,6 @@ class PullRequests(models.Model):
         }
         return sorted(commits, key=lambda c: idx[c['sha']])
 
-
-    def _port_forward(self):
-        if not self:
-            return
-
-        all_sources = [(p.source_id or p) for p in self]
-        all_targets = [s._find_next_target(p) for s, p in zip(all_sources, self)]
-
-        ref = self[0]
-        base = all_sources[0]
-        target = all_targets[0]
-        if target is None:
-            _logger.info(
-                "Will not forward-port %s: no next target",
-                ref.display_name,
-            )
-            return  # QUESTION: do the prs need to be updated?
-
-        # check if the PRs have already been forward-ported: is there a PR
-        # with the same source targeting the next branch in the series
-        for source in all_sources:
-            if self.search_count([('source_id', '=', source.id), ('target', '=', target.id)]):
-                _logger.info("Will not forward-port %s: already ported", ref.display_name)
-                return
-
-        # check if all PRs in the batch have the same "next target" , bail if
-        # that's not the case as it doesn't make sense for forward one PR from
-        # a to b and a linked pr from a to c
-        different_target = next((t for t in all_targets if t != target), None)
-        if different_target:
-            different_pr = next(p for p, t in zip(self, all_targets) if t == different_target)
-            for pr, t in zip(self, all_targets):
-                linked, other = different_pr, different_target
-                if t != target:
-                    linked, other = ref, target
-                self.env.ref('runbot_merge.forwardport.failure.discrepancy')._send(
-                    repository=pr.repository,
-                    pull_request=pr.number,
-                    token_field='fp_github_token',
-                    format_args={'pr': pr, 'linked': linked, 'next': t.name, 'other': other.name},
-                )
-            _logger.warning(
-                "Cancelling forward-port of %s: found different next branches (%s)",
-                self, all_targets
-            )
-            return
-
-        proj = self.mapped('target.project_id')
-        if not proj.fp_github_token:
-            _logger.warning(
-                "Can not forward-port %s: no token on project %s",
-                ref.display_name,
-                proj.name
-            )
-            return
-
-        notarget = [p.repository.name for p in self if not p.repository.fp_remote_target]
-        if notarget:
-            _logger.error(
-                "Can not forward-port %s: repos %s don't have a remote configured",
-                self, ', '.join(notarget)
-            )
-            return
-
-        # take only the branch bit
-        new_branch = '%s-%s-%s-fw' % (
-            target.name,
-            base.refname,
-            # avoid collisions between fp branches (labels can be reused
-            # or conflict especially as we're chopping off the owner)
-            base64.urlsafe_b64encode(os.urandom(3)).decode()
-        )
-        # TODO: send outputs to logging?
-        conflicts = {}
-        with contextlib.ExitStack() as s:
-            for pr in self:
-                conflicts[pr], working_copy = pr._create_fp_branch(
-                    target, new_branch, s)
-
-                working_copy.push('target', new_branch)
-
-        gh = requests.Session()
-        gh.headers['Authorization'] = 'token %s' % proj.fp_github_token
-        has_conflicts = any(conflicts.values())
-        # problemo: this should forward port a batch at a time, if porting
-        # one of the PRs in the batch fails is huge problem, though this loop
-        # only concerns itself with the creation of the followup objects so...
-        new_batch = self.browse(())
-        self.env.cr.execute('LOCK runbot_merge_pull_requests IN SHARE MODE')
-        for pr in self:
-            owner, _ = pr.repository.fp_remote_target.split('/', 1)
-            source = pr.source_id or pr
-            root = pr.root_id
-
-            message = source.message + '\n\n' + '\n'.join(
-                "Forward-Port-Of: %s" % p.display_name
-                for p in root | source
-            )
-
-            title, body = re.match(r'(?P<title>[^\n]+)\n*(?P<body>.*)', message, flags=re.DOTALL).groups()
-            r = gh.post(f'https://api.github.com/repos/{pr.repository.name}/pulls', json={
-                'base': target.name,
-                'head': f'{owner}:{new_branch}',
-                'title': '[FW]' + (' ' if title[0] != '[' else '') + title,
-                'body': body
-            })
-            if not r.ok:
-                _logger.warning("Failed to create forward-port PR for %s, deleting branches", pr.display_name)
-                # delete all the branches this should automatically close the
-                # PRs if we've created any. Using the API here is probably
-                # simpler than going through the working copies
-                for repo in self.mapped('repository'):
-                    d = gh.delete(f'https://api.github.com/repos/{repo.fp_remote_target}/git/refs/heads/{new_branch}')
-                    if d.ok:
-                        _logger.info("Deleting %s:%s=success", repo.fp_remote_target, new_branch)
-                    else:
-                        _logger.warning("Deleting %s:%s=%s", repo.fp_remote_target, new_branch, d.text)
-                raise RuntimeError("Forwardport failure: %s (%s)" % (pr.display_name, r.text))
-
-            new_pr = self._from_gh(r.json())
-            _logger.info("Created forward-port PR %s", new_pr)
-            new_batch |= new_pr
-
-            # allows PR author to close or skipci
-            new_pr.write({
-                'merge_method': pr.merge_method,
-                'source_id': source.id,
-                # only link to previous PR of sequence if cherrypick passed
-                'parent_id': pr.id if not has_conflicts else False,
-                'detach_reason': "conflicts: {}".format(
-                    f'\n{conflicts[pr]}\n{conflicts[pr]}'.strip()
-                ) if has_conflicts else None,
-            })
-            if has_conflicts and pr.parent_id and pr.state not in ('merged', 'closed'):
-                self.env.ref('runbot_merge.forwardport.failure.conflict')._send(
-                    repository=pr.repository,
-                    pull_request=pr.number,
-                    token_field='fp_github_token',
-                    format_args={'source': source, 'pr': pr, 'new': new_pr, 'footer': footer},
-                )
-
-        for pr, new_pr in zip(self, new_batch):
-            (h, out, err, hh) = conflicts.get(pr) or (None, None, None, None)
-
-            if h:
-                sout = serr = ''
-                if out.strip():
-                    sout = f"\nstdout:\n```\n{out}\n```\n"
-                if err.strip():
-                    serr = f"\nstderr:\n```\n{err}\n```\n"
-
-                lines = ''
-                if len(hh) > 1:
-                    lines = '\n' + ''.join(
-                        '* %s%s\n' % (sha, ' <- on this commit' if sha == h else '')
-                        for sha in hh
-                    )
-                template = 'runbot_merge.forwardport.failure'
-                format_args = {
-                    'pr': new_pr,
-                    'commits': lines,
-                    'stdout': sout,
-                    'stderr': serr,
-                    'footer': footer,
-                }
-            elif has_conflicts:
-                template = 'runbot_merge.forwardport.linked'
-                format_args = {
-                    'pr': new_pr,
-                    'siblings': ', '.join(p.display_name for p in (new_batch - new_pr)),
-                    'footer': footer,
-                }
-            elif base._find_next_target(new_pr) is None:
-                ancestors = "".join(
-                    "* %s\n" % p.display_name
-                    for p in pr._iter_ancestors()
-                    if p.parent_id
-                )
-                template = 'runbot_merge.forwardport.final'
-                format_args = {
-                    'pr': new_pr,
-                    'containing': ' containing:' if ancestors else '.',
-                    'ancestors': ancestors,
-                    'footer': footer,
-                }
-            else:
-                template = 'runbot_merge.forwardport.intermediate'
-                format_args = {
-                    'pr': new_pr,
-                    'footer': footer,
-                }
-            self.env.ref(template)._send(
-                repository=new_pr.repository,
-                pull_request=new_pr.number,
-                token_field='fp_github_token',
-                format_args=format_args,
-            )
-
-            labels = ['forwardport']
-            if has_conflicts:
-                labels.append('conflict')
-            self.env['runbot_merge.pull_requests.tagging'].create({
-                'repository': new_pr.repository.id,
-                'pull_request': new_pr.number,
-                'tags_add': labels,
-            })
-
-        # try to schedule followup
-        new_batch[0]._schedule_fp_followup()
-        return new_batch.batch_id
 
     def _create_fp_branch(self, target_branch, fp_branch_name, cleanup):
         """ Creates a forward-port for the current PR to ``target_branch`` under
@@ -969,44 +566,6 @@ stderr:
                 }
             )
 
-class Batch(models.Model):
-    _inherit = 'runbot_merge.batch'
-
-    def write(self, vals):
-        if vals.get('merge_date'):
-            self.env['forwardport.branch_remover'].create([
-                {'pr_id': p.id}
-                for b in self
-                if not b.merge_date
-                for p in b.prs
-            ])
-
-        super().write(vals)
-
-        # if we change the policy to skip CI, schedule followups on existing FPs
-        # FIXME: although this should be managed by the command handler already,
-        #        this should probably allow setting the fw policy on any batch
-        #        of the sequence
-        if vals.get('fw_policy') == 'skipci' and self.merge_date:
-            self.env['runbot_merge.pull_requests'].search([
-                ('source_id', '=', self.prs[:1].id),
-                ('state', 'not in', ('closed', 'merged')),
-            ])._schedule_fp_followup()
-
-        return True
-
-# ordering is a bit unintuitive because the lowest sequence (and name)
-# is the last link of the fp chain, reasoning is a bit more natural the
-# other way around (highest object is the last), especially with Python
-# not really having lazy sorts in the stdlib
-def branch_key(b: Branch, /, _key=itemgetter('sequence', 'name')):
-    return Reverse(_key(b))
-
-
-def pr_key(p: PullRequests, /):
-    return branch_key(p.target)
-
-
 class Stagings(models.Model):
     _inherit = 'runbot_merge.stagings'
 
@@ -1014,7 +573,7 @@ class Stagings(models.Model):
         r = super().write(vals)
         # we've just deactivated a successful staging (so it got ~merged)
         if vals.get('active') is False and self.state == 'success':
-            # check al batches to see if they should be forward ported
+            # check all batches to see if they should be forward ported
             for b in self.with_context(active_test=False).batch_ids:
                 # if all PRs of a batch have parents they're part of an FP
                 # sequence and thus handled separately, otherwise they're

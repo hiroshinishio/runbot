@@ -136,7 +136,7 @@ def test_limit_after_merge(env, config, make_repo, users):
     env.run_crons()
 
     p1, p2 = env['runbot_merge.pull_requests'].search([], order='number')
-    assert p1.limit_id == p2.limit_id == branch_c, "check that limit is correctly set"
+    assert p1.limit_id == p2.limit_id == env['runbot_merge.branch'].browse(())
     pr2 = prod.get_pr(p2.number)
     with prod:
         pr1.post_comment('hansen up to b', reviewer)

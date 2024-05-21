@@ -158,7 +158,7 @@
                             <field name="merge_method"/>
                             <field name="squash"/>
                             <field name="draft"/>
-                            <field string="Up To" name="limit_id"/>
+<!--                            <field string="Up To" name="limit_id"/>-->
 <!--                            <field string="Forward-Port Policy" name="fw_policy"/>-->
                         </group>
                     </group>

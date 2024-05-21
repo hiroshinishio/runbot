@@ -27,7 +27,7 @@ def test_override_inherited(env, config, make_repo, users):
 
     original = env['runbot_merge.pull_requests'].search([('repository.name', '=', repo.name), ('number', '=', pr.number)])
     assert original.state == 'ready'
-    assert original.limit_id.name == 'c'
+    assert not original.limit_id
 
     with repo:
         repo.post_status('staging.a', 'success')

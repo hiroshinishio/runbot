@@ -1,12 +1,14 @@
 import logging
 import re
-from typing import List, Tuple
+from typing import List
 
 import requests
 import sentry_sdk
 
 from odoo import models, fields, api
 from odoo.exceptions import UserError
+from odoo.osv import expression
+from odoo.tools import reverse_order
 
 _logger = logging.getLogger(__name__)
 class Project(models.Model):
@@ -217,3 +219,10 @@ class Project(models.Model):
             ]
         })
         return w.action_open()
+
+    def _forward_port_ordered(self, domain=()):
+        Branches = self.env['runbot_merge.branch']
+        return Branches.search(expression.AND([
+            [('project_id', '=', self.id)],
+            domain or [],
+        ]), order=reverse_order(Branches._order))

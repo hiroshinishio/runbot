@@ -167,7 +167,7 @@ pr: the new forward port
 containing: label changing depending whether there are ancestors to merge
 ancestors: markdown formatted list of parent PRs which can be approved as part of the chain
 footer: a footer"
-runbot_merge.forwardport.intermediate,"This PR targets {pr.target.name} and is part of the forward-port chain. Further PRs will be created up to {pr.limit_id.name}.
+runbot_merge.forwardport.intermediate,"This PR targets {pr.target.name} and is part of the forward-port chain. Further PRs will be created up to {pr.limit_pretty}.
 {footer}","Comment when a forward port was succcessfully created but is not the last of the line.
 
 pr: the new forward port

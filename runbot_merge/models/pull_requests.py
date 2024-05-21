@@ -10,14 +10,16 @@ import logging
 import re
 import time
 from functools import reduce
-from typing import Optional, Union, List, Iterator
+from operator import itemgetter
+from typing import Optional, Union, List, Iterator, Tuple
 
+import psycopg2
 import sentry_sdk
 import werkzeug
 
 from odoo import api, fields, models, tools, Command
 from odoo.osv import expression
-from odoo.tools import html_escape
+from odoo.tools import html_escape, Reverse
 from . import commands
 from .utils import enum
 
@@ -416,10 +418,6 @@ class PullRequests(models.Model):
 
     ping = fields.Char(compute='_compute_ping', recursive=True)
 
-    fw_policy = fields.Selection([
-        ('default', "Default"),
-        ('skipci', "Skip CI"),
-    ], required=True, default="default", string="Forward Port Policy")
     source_id = fields.Many2one('runbot_merge.pull_requests', index=True, help="the original source of this FP even if parents were detached along the way")
     parent_id = fields.Many2one(
         'runbot_merge.pull_requests', index=True,
@@ -514,6 +512,16 @@ class PullRequests(models.Model):
     @property
     def _linked_prs(self):
         return self.batch_id.prs - self
+
+    @property
+    def limit_pretty(self):
+        if self.limit_id:
+            return self.limit_id.name
+
+        branches = self.repository.project_id.branch_ids
+        if ((bf := self.repository.branch_filter) or '[]') != '[]':
+            branches = branches.filtered_domain(ast.literal_eval(bf))
+        return branches[:1].name
 
     @api.depends(
         'batch_id.prs.draft',
@@ -797,10 +805,20 @@ class PullRequests(models.Model):
                     else:
                         msg = "you can't configure forward-port CI."
                 case commands.Limit(branch) if is_author:
-                    ping, msg = self._maybe_update_limit(branch or self.target.name)
-                    if not ping:
-                        feedback(message=msg)
-                        msg = None
+                    limit = branch or self.target.name
+                    for p in self.batch_id.prs:
+                        ping, m = p._maybe_update_limit(limit)
+
+                        if ping and p == self:
+                            msg = m
+                        else:
+                            if ping:
+                                m = f"@{login} {m}"
+                            self.env['runbot_merge.pull_requests.feedback'].create({
+                                'repository': p.repository.id,
+                                'pull_request': p.number,
+                                'message': m,
+                            })
                 case commands.Limit():
                     msg = "you can't set a forward-port limit."
                 # NO!
@@ -823,6 +841,121 @@ class PullRequests(models.Model):
             rejections = ' ' + rejections_list.removeprefix("\n- ") if rejections_list.count('\n- ') == 1 else rejections_list
             feedback(message=f"@{login}{rejections}{footer}")
         return 'rejected'
+
+    def _maybe_update_limit(self, limit: str) -> Tuple[bool, str]:
+        limit_id = self.env['runbot_merge.branch'].with_context(active_test=False).search([
+            ('project_id', '=', self.repository.project_id.id),
+            ('name', '=', limit),
+        ])
+        if not limit_id:
+            return True, f"there is no branch {limit!r}, it can't be used as a forward port target."
+
+        if limit_id != self.target and not limit_id.active:
+            return True, f"branch {limit_id.name!r} is disabled, it can't be used as a forward port target."
+
+        # not forward ported yet, just acknowledge the request
+        if not self.source_id and self.state != 'merged':
+            self.limit_id = limit_id
+            if branch_key(limit_id) <= branch_key(self.target):
+                return False, "Forward-port disabled."
+            else:
+                return False, f"Forward-porting to {limit_id.name!r}."
+
+        # if the PR has been forwardported
+        prs = (self | self.forwardport_ids | self.source_id | self.source_id.forwardport_ids)
+        tip = max(prs, key=pr_key)
+        # if the fp tip was closed it's fine
+        if tip.state == 'closed':
+            return True, f"{tip.display_name} is closed, no forward porting is going on"
+
+        prs.limit_id = limit_id
+
+        real_limit = max(limit_id, tip.target, key=branch_key)
+
+        addendum = ''
+        # check if tip was queued for forward porting, try to cancel if we're
+        # supposed to stop here
+        if real_limit == tip.target and (task := self.env['forwardport.batches'].search([('batch_id', '=', tip.batch_id.id)])):
+            try:
+                with self.env.cr.savepoint():
+                    self.env.cr.execute(
+                        "SELECT FROM forwardport_batches "
+                        "WHERE id = %s FOR UPDATE NOWAIT",
+                        [task.id])
+            except psycopg2.errors.LockNotAvailable:
+                # row locked = port occurring and probably going to succeed,
+                # so next(real_limit) likely a done deal already
+                return True, (
+                    f"Forward port of {tip.display_name} likely already "
+                    f"ongoing, unable to cancel, close next forward port "
+                    f"when it completes.")
+            else:
+                self.env.cr.execute("DELETE FROM forwardport_batches WHERE id = %s", [task.id])
+
+        if real_limit != tip.target:
+            # forward porting was previously stopped at tip, and we want it to
+            # resume
+            if tip.state == 'merged':
+                self.env['forwardport.batches'].create({
+                    'batch_id': tip.batch_id.id,
+                    'source': 'fp' if tip.parent_id else 'merge',
+                })
+                resumed = tip
+            else:
+                resumed = tip.batch_id._schedule_fp_followup()
+            if resumed:
+                addendum += f', resuming forward-port stopped at {tip.display_name}'
+
+        if real_limit != limit_id:
+            addendum += f' (instead of the requested {limit_id.name!r} because {tip.display_name} already exists)'
+
+        # get a "stable" root rather than self's to avoid divertences between
+        # PRs across a root divide (where one post-root would point to the root,
+        # and one pre-root would point to the source, or a previous root)
+        root = tip.root_id
+        # reference the root being forward ported unless we are the root
+        root_ref = '' if root == self else f' {root.display_name}'
+        msg = f"Forward-porting{root_ref} to {real_limit.name!r}{addendum}."
+        # send a message to the source & root except for self, if they exist
+        root_msg = f'Forward-porting to {real_limit.name!r} (from {self.display_name}).'
+        self.env['runbot_merge.pull_requests.feedback'].create([
+            {
+                'repository': p.repository.id,
+                'pull_request': p.number,
+                'message': root_msg,
+                'token_field': 'fp_github_token',
+            }
+            # send messages to source and root unless root is self (as it
+            # already gets the normal message)
+            for p in (self.source_id | root) - self
+        ])
+
+        return False, msg
+
+
+    def _find_next_target(self) -> Optional[Branch]:
+        """ Finds the branch between target and limit_id which follows
+        reference
+        """
+        root = (self.source_id or self)
+        if self.target == root.limit_id:
+            return
+
+        branches = root.target.project_id.with_context(active_test=False)._forward_port_ordered()
+        if (branch_filter := self.repository.branch_filter) and branch_filter != '[]':
+            branches = branches.filtered_domain(ast.literal_eval(branch_filter))
+
+        branches = list(branches)
+        from_ = branches.index(self.target) + 1
+        to_ = branches.index(root.limit_id) + 1 if root.limit_id else None
+
+        # return the first active branch in the set
+        return next((
+            branch
+            for branch in branches[from_:to_]
+            if branch.active
+        ), None)
+
 
     def _approve(self, author, login):
         oldstate = self.state
@@ -1023,20 +1156,33 @@ class PullRequests(models.Model):
         return self.state
 
     def _get_batch(self, *, target, label):
-        Batches = self.env['runbot_merge.batch']
-        if re.search(r':patch-\d+$', label):
-            batch = Batches
-        else:
-            batch = Batches.search([
+        batch = self.env['runbot_merge.batch']
+        if not re.search(r':patch-\d+$', label):
+            batch = batch.search([
                 ('merge_date', '=', False),
-                ('target', '=', target),
+                ('prs.target', '=', target),
                 ('prs.label', '=', label),
             ])
-        return batch or Batches.create({'target': target})
+        return batch or batch.create({})
 
     @api.model
     def create(self, vals):
-        vals['batch_id'] = self._get_batch(target=vals['target'], label=vals['label']).id
+        batch = self._get_batch(target=vals['target'], label=vals['label'])
+        vals['batch_id'] = batch.id
+        if 'limit_id' not in vals:
+            limits = {p.limit_id for p in batch.prs}
+            if len(limits) == 1:
+                vals['limit_id'] = limits.pop().id
+            elif limits:
+                repo = self.env['runbot_merge.repository'].browse(vals['repository'])
+                _logger.warning(
+                    "Unable to set limit on %s#%s: found multiple limits in batch (%s)",
+                    repo.name, vals['number'],
+                    ', '.join(
+                        f'{p.display_name} => {p.limit_id.name}'
+                        for p in batch.prs
+                    )
+                )
 
         pr = super().create(vals)
         c = self.env['runbot_merge.commit'].search([('sha', '=', pr.head)])
@@ -1116,13 +1262,6 @@ class PullRequests(models.Model):
                     target=vals.get('target') or self.target.id,
                     label=vals.get('label') or self.label,
                 )
-            case None if (new_target := vals.get('target')) and new_target != self.target.id:
-                vals['batch_id'] = self._get_batch(
-                    target=new_target,
-                    label=vals.get('label') or self.label,
-                )
-                if len(self.batch_id.prs) == 1:
-                    self.env.cr.precommit.add(self.batch_id.unlink)
         w = super().write(vals)
 
         newhead = vals.get('head')
@@ -1258,6 +1397,18 @@ class PullRequests(models.Model):
         if not old_batch.prs:
             old_batch.unlink()
         return True
+
+# ordering is a bit unintuitive because the lowest sequence (and name)
+# is the last link of the fp chain, reasoning is a bit more natural the
+# other way around (highest object is the last), especially with Python
+# not really having lazy sorts in the stdlib
+def branch_key(b: Branch, /, _key=itemgetter('sequence', 'name')):
+    return Reverse(_key(b))
+
+
+def pr_key(p: PullRequests, /):
+    return branch_key(p.target)
+
 
 # state changes on reviews
 RPLUS = {
