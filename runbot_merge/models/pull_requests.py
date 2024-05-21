@@ -798,7 +798,7 @@ class PullRequests(models.Model):
                     feedback(close=True)
                 case commands.FW():
                     if source_reviewer or is_reviewer:
-                        (self.source_id or self).fw_policy = command.name.lower()
+                        (self.source_id or self).batch_id.fw_policy = command.name.lower()
                         match command:
                             case commands.FW.DEFAULT:
                                 message = "Waiting for CI to create followup forward-ports."

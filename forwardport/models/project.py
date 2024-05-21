@@ -38,8 +38,8 @@ from odoo.tools.misc import topological_sort, groupby, Reverse
 from odoo.tools.sql import reverse_order
 from odoo.tools.appdirs import user_cache_dir
 from odoo.addons.base.models.res_partner import Partner
-from odoo.addons.runbot_merge import git, utils
-from odoo.addons.runbot_merge.models.pull_requests import RPLUS, Branch
+from odoo.addons.runbot_merge import git
+from odoo.addons.runbot_merge.models.pull_requests import Branch
 from odoo.addons.runbot_merge.models.stagings_create import Message
 
 
@@ -258,12 +258,6 @@ class PullRequests(models.Model):
                         token_field='fp_github_token',
                         format_args={'pr': parent, 'child': p},
                     )
-        # if we change the policy to skip CI, schedule followups on existing FPs
-        if vals.get('fw_policy') == 'skipci' and self.state == 'merged':
-            self.env['runbot_merge.pull_requests'].search([
-                ('source_id', '=', self.id),
-                ('state', 'not in', ('closed', 'merged')),
-            ])._schedule_fp_followup()
         return r
 
     def _try_closing(self, by):
@@ -396,7 +390,7 @@ class PullRequests(models.Model):
             if not pr.parent_id:
                 _logger.info('-> no parent %s (%s)', pr.display_name, pr.parent_id)
                 continue
-            if not self.env.context.get('force_fw') and self.source_id.fw_policy != 'skipci' and pr.state not in ['validated', 'ready']:
+            if not self.env.context.get('force_fw') and self.source_id.batch_id.fw_policy != 'skipci' and pr.state not in ['validated', 'ready']:
                 _logger.info('-> wrong state %s (%s)', pr.display_name, pr.state)
                 continue
 
@@ -424,7 +418,7 @@ class PullRequests(models.Model):
             # check if batch-mate are all valid
             mates = batch.prs
             # wait until all of them are validated or ready
-            if not self.env.context.get('force_fw') and any(pr.source_id.fw_policy != 'skipci' and pr.state not in ('validated', 'ready') for pr in mates):
+            if not self.env.context.get('force_fw') and any(pr.source_id.batch_id.fw_policy != 'skipci' and pr.state not in ('validated', 'ready') for pr in mates):
                 _logger.info("-> not ready (%s)", [(pr.display_name, pr.state) for pr in mates])
                 continue
 
@@ -988,6 +982,16 @@ class Batch(models.Model):
             ])
 
         super().write(vals)
+
+        # if we change the policy to skip CI, schedule followups on existing FPs
+        # FIXME: although this should be managed by the command handler already,
+        #        this should probably allow setting the fw policy on any batch
+        #        of the sequence
+        if vals.get('fw_policy') == 'skipci' and self.merge_date:
+            self.env['runbot_merge.pull_requests'].search([
+                ('source_id', '=', self.prs[:1].id),
+                ('state', 'not in', ('closed', 'merged')),
+            ])._schedule_fp_followup()
 
         return True
 

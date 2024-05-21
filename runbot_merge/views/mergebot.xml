@@ -159,7 +159,7 @@
                             <field name="squash"/>
                             <field name="draft"/>
                             <field string="Up To" name="limit_id"/>
-                            <field string="Forward-Port Policy" name="fw_policy"/>
+<!--                            <field string="Forward-Port Policy" name="fw_policy"/>-->
                         </group>
                     </group>
                     <!-- influencers -->

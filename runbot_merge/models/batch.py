@@ -20,6 +20,11 @@ class Batch(models.Model):
 
     prs = fields.One2many('runbot_merge.pull_requests', 'batch_id')
 
+    fw_policy = fields.Selection([
+        ('default', "Default"),
+        ('skipci', "Skip CI"),
+    ], required=True, default="default", string="Forward Port Policy")
+
     merge_date = fields.Datetime(tracking=True)
     skipchecks = fields.Boolean(
         string="Skips Checks",

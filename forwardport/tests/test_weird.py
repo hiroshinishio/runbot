@@ -655,7 +655,7 @@ def test_skip_ci_all(env, config, make_repo):
     assert env['runbot_merge.pull_requests'].search([
         ('repository.name', '=', prod.name),
         ('number', '=', pr.number)
-    ]).fw_policy == 'skipci'
+    ]).batch_id.fw_policy == 'skipci'
 
     with prod:
         prod.post_status('staging.a', 'success', 'legal/cla')
@@ -695,7 +695,7 @@ def test_skip_ci_next(env, config, make_repo):
             'hansen fw=skipci',
             config['role_reviewer']['token']
         )
-    assert pr0_id.fw_policy == 'skipci'
+    assert pr0_id.batch_id.fw_policy == 'skipci'
     env.run_crons()
 
     _, _, pr2_id = env['runbot_merge.pull_requests'].search([], order='number')
