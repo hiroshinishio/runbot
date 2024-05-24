@@ -929,8 +929,11 @@ class PullRequests(models.Model):
                     st = 'pending'
             pr.status = st
 
-    # closed, merged, error should be exclusive, so this should probably be a selection
-    @api.depends("status", "reviewed_by", 'batch_id.merge_date', "closed", "error")
+    @api.depends(
+        "status", "reviewed_by", "closed", "error" ,
+        "batch_id.merge_date",
+        "batch_id.skipchecks",
+    )
     def _compute_state(self):
         for pr in self:
             if pr.batch_id.merge_date:
@@ -939,6 +942,8 @@ class PullRequests(models.Model):
                 pr.state = "closed"
             elif pr.error:
                 pr.state = "error"
+            elif pr.batch_id.skipchecks: # skipchecks behaves as both approval and status override
+                pr.state = "ready"
             else:
                 states = ("opened", "approved", "validated", "ready")
                 pr.state = states[bool(pr.reviewed_by) | ((pr.status == "success") << 1)]
@@ -1079,22 +1084,13 @@ class PullRequests(models.Model):
 
         # when explicitly marking a PR as ready
         if vals.get('state') == 'ready':
-            # skip checks anyway
+            # skip validation
             self.batch_id.skipchecks = True
-            # if the state is forced to ready, set current user as reviewer
-            # and override all statuses
+            # mark current user as reviewer
             vals.setdefault('reviewed_by', self.env.user.partner_id.id)
-            # override all known statuses just for safety
-            vals.setdefault('overrides', json.dumps({
-                st.context: {
-                    'state': 'success',
-                    'target_url': None,
-                    'description': f"Forced by @{self.env.user.partner_id.github_login}",
-                }
-                for st in self.env['runbot_merge.repository.status'].search([
-                    ('prs', '=', True),
-                ])
-            }))
+            for p in self.batch_id.prs - self:
+                if not p.reviewed_by:
+                    p.reviewed_by = self.env.user.partner_id.id
 
         for pr in self:
             if (t := vals.get('target')) is not None and pr.target.id != t:

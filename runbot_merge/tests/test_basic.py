@@ -2810,7 +2810,7 @@ class TestBatching(object):
             pr01 = self._pr(repo, 'Urgent1', [{'n': 'n'}, {'o': 'o'}], user=config['role_user']['token'], reviewer=None, statuses=[])
             pr01.post_comment('hansen NOW! rebase-merge', config['role_reviewer']['token'])
         p_01 = to_pr(env, pr01)
-        assert p_01.state == 'approved'
+        assert p_01.state == 'ready'
         assert p_01.priority == 'alone'
         assert p_01.skipchecks == True
 
@@ -2862,7 +2862,7 @@ class TestBatching(object):
             )
         env.run_crons()
         assert not staging_3.active
-        assert p_01.state == 'opened'
+        assert p_01.state == 'ready'
         assert p_01.priority == 'alone'
         assert p_01.skipchecks == True
         assert p_01.staging_id.active

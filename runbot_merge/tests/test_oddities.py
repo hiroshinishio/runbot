@@ -273,6 +273,6 @@ def test_force_ready(env, make_repo, project, setreviewers, config):
     pr_id.state = 'ready'
 
     assert pr_id.state == 'ready'
+    assert pr_id.status == 'pending'
     reviewer = env['res.users'].browse([env._uid]).partner_id
     assert pr_id.reviewed_by == reviewer
-    assert pr_id.overrides

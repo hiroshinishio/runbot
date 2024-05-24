@@ -28,6 +28,8 @@ class Batch(models.Model):
     ], required=True, default="default", string="Forward Port Policy")
 
     merge_date = fields.Datetime(tracking=True)
+    # having skipchecks skip both validation *and approval* makes sense because
+    # it's batch-wise, having to approve individual PRs is annoying
     skipchecks = fields.Boolean(
         string="Skips Checks",
         default=False, tracking=True,
