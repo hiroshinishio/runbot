@@ -14,27 +14,30 @@ h1, h2, h3, h4, h5, h6{
   margin-bottom: 0.33em;
 }
 h5 { font-size: 1em; }
-.bg-success, .bg-info, .bg-warning, .bg-danger, .bg-gray-lighter {
+.bg-success, .bg-info, .bg-warning, .bg-danger, .bg-gray-lighter,
+.table-success, .table-info, .table-warning, .table-danger {
   color: inherit;
 }
 .dropdown-item, .dropdown-menu, .dropdown-menu a {
   color: inherit;
 }
-.bg-success {
-  background-color: #dff0d8 !important;
+
+$mergebot-colors: ("success": #dff0d8, "danger": #f2dede, "warning": #fcf8e3, "info": #d9edf7);
+@each $category, $color in $mergebot-colors {
+  .bg-#{$category} {
+    background-color: $color !important;
+  }
+  .table-#{$category} {
+    background-color: $color !important;
+    &.table-active {
+      background-color: scale-color($color, $lightness: -5%) !important;
+    }
+  }
 }
 .bg-unmerged {
-  background-color: #dcefe8 !important
+  background-color: #f8f0e3 !important
 }
-.bg-info {
-  background-color: #d9edf7 !important;
-}
-.bg-warning {
-  background-color: #fcf8e3 !important;
-}
-.bg-danger {
-  background-color: #f2dede !important;
-}
+
 .list-inline {
   margin-bottom: 10px;
 }
@@ -120,4 +123,17 @@ dl.runbot-merge-fields {
   @extend .text-nowrap;
   // works better for the left edge of the *box*
   @extend .border-left;
+}
+
+// batches sequence table in PR dashboard: mostly uses (customised) bootstrap
+// but some of the style is bespoke because inline styles don't work well with
+// CSP
+.closed {
+  text-decoration: line-through;
+}
+tr.inactive {
+  opacity: 0.5;
+}
+td.detached {
+  border-top: 2px solid map-get($theme-colors, "danger");
 }

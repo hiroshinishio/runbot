@@ -6,16 +6,17 @@ import json
 import logging
 import os
 import re
+from collections.abc import Mapping
 from difflib import Differ
-from itertools import takewhile
 from operator import itemgetter
 from typing import Dict, Union, Optional, Literal, Callable, Iterator, Tuple, List, TypeAlias
 
 from werkzeug.datastructures import Headers
 
-from odoo import api, models, fields
-from odoo.tools import OrderedSet
-from .pull_requests import Branch, Stagings, PullRequests, Repository, Batch
+from odoo import api, models, fields, Command
+from odoo.tools import OrderedSet, groupby
+from .pull_requests import Branch, Stagings, PullRequests, Repository
+from .batch import Batch
 from .. import exceptions, utils, github, git
 
 WAIT_FOR_VISIBILITY = [10, 10, 10, 10]
@@ -56,32 +57,48 @@ def try_staging(branch: Branch) -> Optional[Stagings]:
     if branch.active_staging_id:
         return None
 
-    rows = [
-        (p, prs)
-        for p, prs in ready_prs(for_branch=branch)
-        if not any(prs.mapped('blocked'))
-    ]
-    if not rows:
+    def log(label: str, batches: Batch) -> None:
+        _logger.info(label, ', '.join(batches.mapped('prs.display_name')))
+
+    alone, batches = ready_batches(for_branch=branch)
+
+    if alone:
+        log("staging high-priority PRs %s", batches)
+    elif branch.project_id.staging_priority == 'default':
+        if split := branch.split_ids[:1]:
+            batches = split.batch_ids
+            split.unlink()
+            log("staging split PRs %s (prioritising splits)", batches)
+        else:
+            # priority, normal; priority = sorted ahead of normal, so always picked
+            # first as long as there's room
+            log("staging ready PRs %s (prioritising splits)", batches)
+    elif branch.project_id.staging_priority == 'ready':
+        if batches:
+            log("staging ready PRs %s (prioritising ready)", batches)
+        else:
+            split = branch.split_ids[:1]
+            batches = split.batch_ids
+            split.unlink()
+            log("staging split PRs %s (prioritising ready)", batches)
+    else:
+        assert branch.project_id.staging_priority == 'largest'
+        maxsplit = max(branch.split_ids, key=lambda s: len(s.batch_ids), default=branch.env['runbot_merge.split'])
+        _logger.info("largest split = %d, ready = %d", len(maxsplit.batch_ids), len(batches))
+        # bias towards splits if len(ready) = len(batch_ids)
+        if len(maxsplit.batch_ids) >= len(batches):
+            batches = maxsplit.batch_ids
+            maxsplit.unlink()
+            log("staging split PRs %s (prioritising largest)", batches)
+        else:
+            log("staging ready PRs %s (prioritising largest)", batches)
+
+    if not batches:
         return
 
-    priority = rows[0][0]
-    if priority == 0 or priority == 1:
-        # p=0 take precedence over all else
-        # p=1 allows merging a fix inside / ahead of a split (e.g. branch
-        # is broken or widespread false positive) without having to cancel
-        # the existing staging
-        batched_prs = [pr_ids for _, pr_ids in takewhile(lambda r: r[0] == priority, rows)]
-    elif branch.split_ids:
-        split_ids = branch.split_ids[0]
-        _logger.info("Found split of PRs %s, re-staging", split_ids.mapped('batch_ids.prs'))
-        batched_prs = [batch.prs for batch in split_ids.batch_ids]
-        split_ids.unlink()
-    else: # p=2
-        batched_prs = [pr_ids for _, pr_ids in takewhile(lambda r: r[0] == priority, rows)]
+    original_heads, staging_state = staging_setup(branch, batches)
 
-    original_heads, staging_state = staging_setup(branch, batched_prs)
-
-    staged = stage_batches(branch, batched_prs, staging_state)
+    staged = stage_batches(branch, batches, staging_state)
 
     if not staged:
         return None
@@ -148,7 +165,7 @@ For-Commit-Id: {it.head}
     # create actual staging object
     st: Stagings = env['runbot_merge.stagings'].create({
         'target': branch.id,
-        'batch_ids': [(4, batch.id, 0) for batch in staged],
+        'staging_batch_ids': [Command.create({'runbot_merge_batch_id': batch.id}) for batch in staged],
         'heads': heads,
         'commits': commits,
     })
@@ -171,36 +188,33 @@ For-Commit-Id: {it.head}
     return st
 
 
-def ready_prs(for_branch: Branch) -> List[Tuple[int, PullRequests]]:
+def ready_batches(for_branch: Branch) -> Tuple[bool, Batch]:
     env = for_branch.env
+    # splits are ready by definition, we need to exclude them from the ready
+    # rows otherwise if a prioritised (alone) PR is part of a split it'll be
+    # staged through priority *and* through split.
+    split_ids = for_branch.split_ids.batch_ids.ids
     env.cr.execute("""
-    SELECT
-      min(pr.priority) as priority,
-      array_agg(pr.id) AS match
-    FROM runbot_merge_pull_requests pr
-    WHERE pr.target = any(%s)
-      -- exclude terminal states (so there's no issue when
-      -- deleting branches & reusing labels)
-      AND pr.state != 'merged'
-      AND pr.state != 'closed'
-    GROUP BY
-        pr.target,
-        CASE
-            WHEN pr.label SIMILAR TO '%%:patch-[[:digit:]]+'
-                THEN pr.id::text
-            ELSE pr.label
-        END
-    HAVING
-        bool_or(pr.state = 'ready') or bool_or(pr.priority = 0)
-    ORDER BY min(pr.priority), min(pr.id)
-    """, [for_branch.ids])
-    browse = env['runbot_merge.pull_requests'].browse
-    return [(p, browse(ids)) for p, ids in env.cr.fetchall()]
+        SELECT max(priority)
+        FROM runbot_merge_batch
+        WHERE blocked IS NULL AND target = %s AND NOT id = any(%s)
+    """, [for_branch.id, split_ids])
+    alone = env.cr.fetchone()[0] == 'alone'
+
+    return (
+        alone,
+        env['runbot_merge.batch'].search([
+            ('target', '=', for_branch.id),
+            ('blocked', '=', False),
+            ('priority', '=', 'alone') if alone else (1, '=', 1),
+            ('id', 'not in', split_ids),
+        ], order="priority DESC, id ASC"),
+    )
 
 
 def staging_setup(
         target: Branch,
-        batched_prs: List[PullRequests],
+        batches: Batch,
 ) -> Tuple[Dict[Repository, str], StagingState]:
     """Sets up the staging:
 
@@ -208,7 +222,9 @@ def staging_setup(
     - creates tmp branch via gh API (to remove)
     - generates working copy for each repository with the target branch
     """
-    all_prs: PullRequests = target.env['runbot_merge.pull_requests'].concat(*batched_prs)
+    by_repo: Mapping[Repository, List[PullRequests]] = \
+        dict(groupby(batches.prs, lambda p: p.repository))
+
     staging_state = {}
     original_heads = {}
     for repo in target.project_id.repo_ids.having_branch(target):
@@ -224,7 +240,7 @@ def staging_setup(
             # be hooked only to "proper" remote-tracking branches
             # (in `refs/remotes`), it doesn't seem to work here
             f'+refs/heads/{target.name}:refs/heads/{target.name}',
-            *(pr.head for pr in all_prs if pr.repository == repo)
+            *(pr.head for pr in by_repo.get(repo, []))
         )
         original_heads[repo] = head
         staging_state[repo] = StagingSlice(gh=gh, head=head, repo=source.stdout().with_config(text=True, check=False))
@@ -232,14 +248,13 @@ def staging_setup(
     return original_heads, staging_state
 
 
-def stage_batches(branch: Branch, batched_prs: List[PullRequests], staging_state: StagingState) -> Stagings:
+def stage_batches(branch: Branch, batches: Batch, staging_state: StagingState) -> Stagings:
     batch_limit = branch.project_id.batch_limit
     env = branch.env
     staged = env['runbot_merge.batch']
-    for batch in batched_prs:
+    for batch in batches:
         if len(staged) >= batch_limit:
             break
-
         try:
             staged |= stage_batch(env, batch, staging_state)
         except exceptions.MergeError as e:
@@ -290,16 +305,18 @@ def parse_refs_smart(read: Callable[[int], bytes]) -> Iterator[Tuple[str, str]]:
 UNCHECKABLE = ['merge_method', 'overrides', 'draft']
 
 
-def stage_batch(env: api.Environment, prs: PullRequests, staging: StagingState) -> Batch:
+def stage_batch(env: api.Environment, batch: Batch, staging: StagingState):
     """Stages the batch represented by the ``prs`` recordset, onto the
     current corresponding staging heads.
 
     Alongside returning the newly created batch, updates ``staging[*].head``
     in-place on success. On failure, the heads should not be touched.
+
+    May return an empty recordset on some non-fatal failures.
     """
     new_heads: Dict[PullRequests, str] = {}
     pr_fields = env['runbot_merge.pull_requests']._fields
-    for pr in prs:
+    for pr in batch.prs:
         info = staging[pr.repository]
         _logger.info(
             "Staging pr %s for target %s; method=%s",
@@ -308,7 +325,7 @@ def stage_batch(env: api.Environment, prs: PullRequests, staging: StagingState) 
         )
 
         try:
-            method, new_heads[pr] = stage(pr, info, related_prs=(prs - pr))
+            method, new_heads[pr] = stage(pr, info, related_prs=(batch.prs - pr))
             _logger.info(
                 "Staged pr %s to %s by %s: %s -> %s",
                 pr.display_name, pr.target.name, method,
@@ -337,10 +354,7 @@ def stage_batch(env: api.Environment, prs: PullRequests, staging: StagingState) 
     # update meta to new heads
     for pr, head in new_heads.items():
         staging[pr.repository].head = head
-    return env['runbot_merge.batch'].create({
-        'target': prs[0].target.id,
-        'prs': [(4, pr.id, 0) for pr in prs],
-    })
+    return batch
 
 def format_for_difflib(items: Iterator[Tuple[str, object]]) -> Iterator[str]:
     """ Bit of a pain in the ass because difflib really wants
@@ -408,7 +422,7 @@ def stage(pr: PullRequests, info: StagingSlice, related_prs: PullRequests) -> Tu
         diff.append(('Message', pr.message, msg))
 
     if invalid:
-        pr.write({**invalid, 'state': 'opened', 'head': pr_head})
+        pr.write({**invalid, 'reviewed_by': False, 'head': pr_head})
         raise exceptions.Mismatch(invalid, diff)
 
     if pr.reviewed_by and pr.reviewed_by.name == pr.reviewed_by.github_login:

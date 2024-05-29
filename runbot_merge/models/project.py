@@ -1,11 +1,14 @@
 import logging
 import re
+from typing import List
 
 import requests
 import sentry_sdk
 
 from odoo import models, fields, api
 from odoo.exceptions import UserError
+from odoo.osv import expression
+from odoo.tools import reverse_order
 
 _logger = logging.getLogger(__name__)
 class Project(models.Model):
@@ -23,6 +26,12 @@ class Project(models.Model):
         help="Branches of all project's repos which are managed by the merge bot. Also "\
         "target branches of PR this project handles."
     )
+    staging_enabled = fields.Boolean(default=True)
+    staging_priority = fields.Selection([
+        ('default', "Splits over ready PRs"),
+        ('largest', "Largest of split and ready PRs"),
+        ('ready', "Ready PRs over split"),
+    ], default="default", required=True)
 
     ci_timeout = fields.Integer(
         default=60, required=True, group_operator=None,
@@ -36,8 +45,10 @@ class Project(models.Model):
         required=True,
         default="hanson", # mergebot du bot du bot du~
         help="Prefix (~bot name) used when sending commands from PR "
-             "comments e.g. [hanson retry] or [hanson r+ p=1]",
+             "comments e.g. [hanson retry] or [hanson r+ priority]",
     )
+    fp_github_token = fields.Char()
+    fp_github_name = fields.Char(store=True, compute="_compute_git_identity")
 
     batch_limit = fields.Integer(
         default=8, group_operator=None, help="Maximum number of PRs staged together")
@@ -96,6 +107,24 @@ class Project(models.Model):
             if not project.github_email:
                 raise UserError("The merge bot needs a public or accessible primary email set up.")
 
+    # technically the email could change at any moment...
+    @api.depends('fp_github_token')
+    def _compute_git_identity(self):
+        s = requests.Session()
+        for project in self:
+            if project.fp_github_name or not project.fp_github_token:
+                continue
+
+            r0 = s.get('https://api.github.com/user', headers={
+                'Authorization': 'token %s' % project.fp_github_token
+            })
+            if not r0.ok:
+                _logger.error("Failed to fetch forward bot information for project %s: %s", project.name, r0.text or r0.content)
+                continue
+
+            user = r0.json()
+            project.fp_github_name = user['name'] or user['login']
+
     def _check_stagings(self, commit=False):
         # check branches with an active staging
         for branch in self.env['runbot_merge.branch']\
@@ -120,6 +149,7 @@ class Project(models.Model):
             ('active_staging_id', '=', False),
             ('active', '=', True),
             ('staging_enabled', '=', True),
+            ('project_id.staging_enabled', '=', True),
         ]):
             try:
                 with self.env.cr.savepoint(), \
@@ -132,9 +162,17 @@ class Project(models.Model):
                 if commit:
                     self.env.cr.commit()
 
-    def _find_commands(self, comment):
+    def _find_commands(self, comment: str) -> List[str]:
+        """Tries to find all the lines starting (ignoring leading whitespace)
+        with either the merge or the forward port bot identifiers.
+
+        For convenience, the identifier *can* be prefixed with an ``@`` or
+        ``#``, and suffixed with a ``:``.
+        """
+        # horizontal whitespace (\s - {\n, \r}), but Python doesn't have \h or \p{Blank}
+        h = r'[^\S\r\n]'
         return re.findall(
-            '^\s*[@|#]?{}:? (.*)$'.format(self.github_prefix),
+            fr'^{h}*[@|#]?{self.github_prefix}(?:{h}+|:{h}*)(.*)$',
             comment, re.MULTILINE | re.IGNORECASE)
 
     def _has_branch(self, name):
@@ -181,3 +219,10 @@ class Project(models.Model):
             ]
         })
         return w.action_open()
+
+    def _forward_port_ordered(self, domain=()):
+        Branches = self.env['runbot_merge.branch']
+        return Branches.search(expression.AND([
+            [('project_id', '=', self.id)],
+            domain or [],
+        ]), order=reverse_order(Branches._order))

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import ast
 import collections
 import contextlib
@@ -5,21 +7,26 @@ import datetime
 import itertools
 import json
 import logging
-import pprint
 import re
 import time
-from typing import Optional, Union
+from functools import reduce
+from operator import itemgetter
+from typing import Optional, Union, List, Iterator, Tuple
 
+import psycopg2
 import sentry_sdk
 import werkzeug
 
-from odoo import api, fields, models, tools
-from odoo.exceptions import ValidationError
+from odoo import api, fields, models, tools, Command
 from odoo.osv import expression
+from odoo.tools import html_escape, Reverse
+from . import commands
+from .utils import enum
 
 from .. import github, exceptions, controllers, utils
 
 _logger = logging.getLogger(__name__)
+FOOTER = '\nMore info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port\n'
 
 
 class StatusConfiguration(models.Model):
@@ -218,7 +225,7 @@ All substitutions are tentatively applied sequentially to the input.
             # don't go through controller because try_closing does weird things
             # for safety / race condition reasons which ends up committing
             # and breaks everything
-            pr_id.state = 'closed'
+            pr_id.closed = True
 
         self.env.ref('runbot_merge.pr.load.fetched')._send(
             repository=self,
@@ -282,9 +289,8 @@ class Branch(models.Model):
             b.display_name += ' (inactive)'
 
     def write(self, vals):
-        super().write(vals)
-        if vals.get('active') is False:
-            self.active_staging_id.cancel(
+        if vals.get('active') is False and (actives := self.filtered('active')):
+            actives.active_staging_id.cancel(
                 "Target branch deactivated by %r.",
                 self.env.user.login,
             )
@@ -293,8 +299,9 @@ class Branch(models.Model):
                 'repository': pr.repository.id,
                 'pull_request': pr.number,
                 'message': tmpl._format(pr=pr),
-            } for pr in self.prs])
+            } for pr in actives.prs])
             self.env.ref('runbot_merge.branch_cleanup')._trigger()
+        super().write(vals)
         return True
 
     @api.depends('staging_ids.active')
@@ -305,16 +312,29 @@ class Branch(models.Model):
 
 ACL = collections.namedtuple('ACL', 'is_admin is_reviewer is_author')
 class PullRequests(models.Model):
-    _name = _description = 'runbot_merge.pull_requests'
+    _name = 'runbot_merge.pull_requests'
+    _description = "Pull Request"
+    _inherit = ['mail.thread']
     _order = 'number desc'
     _rec_name = 'number'
 
     id: int
     display_name: str
 
-    target = fields.Many2one('runbot_merge.branch', required=True, index=True)
+    target = fields.Many2one('runbot_merge.branch', required=True, index=True, tracking=True)
     repository = fields.Many2one('runbot_merge.repository', required=True)
     # NB: check that target & repo have same project & provide project related?
+
+    closed = fields.Boolean(default=False, tracking=True)
+    error = fields.Boolean(string="in error", default=False, tracking=True)
+    skipchecks = fields.Boolean(related='batch_id.skipchecks')
+    cancel_staging = fields.Boolean(related='batch_id.cancel_staging')
+    merge_date = fields.Datetime(
+        related='batch_id.merge_date',
+        inverse=lambda _: 1/0,
+        tracking=True,
+        store=True,
+    )
 
     state = fields.Selection([
         ('opened', 'Opened'),
@@ -325,46 +345,66 @@ class PullRequests(models.Model):
         # staged?
         ('merged', 'Merged'),
         ('error', 'Error'),
-    ], default='opened', index=True)
+    ],
+        compute='_compute_state', store=True, default='opened',
+        index=True, tracking=True, column_type=enum(_name, 'state'),
+    )
 
     number = fields.Integer(required=True, index=True, group_operator=None)
     author = fields.Many2one('res.partner', index=True)
-    head = fields.Char(required=True)
+    head = fields.Char(required=True, tracking=True)
     label = fields.Char(
         required=True, index=True,
         help="Label of the source branch (owner:branchname), used for "
              "cross-repository branch-matching"
     )
+    refname = fields.Char(compute='_compute_refname')
     message = fields.Text(required=True)
-    draft = fields.Boolean(default=False, required=True)
-    squash = fields.Boolean(default=False)
+    draft = fields.Boolean(
+        default=False, required=True, tracking=True,
+        help="A draft PR can not be merged",
+    )
+    squash = fields.Boolean(default=False, tracking=True)
     merge_method = fields.Selection([
         ('merge', "merge directly, using the PR as merge commit message"),
         ('rebase-merge', "rebase and merge, using the PR as merge commit message"),
         ('rebase-ff', "rebase and fast-forward"),
         ('squash', "squash"),
-    ], default=False)
+    ], default=False, tracking=True, column_type=enum(_name, 'merge_method'))
     method_warned = fields.Boolean(default=False)
 
-    reviewed_by = fields.Many2one('res.partner', index=True)
+    reviewed_by = fields.Many2one('res.partner', index=True, tracking=True)
     delegates = fields.Many2many('res.partner', help="Delegate reviewers, not intrinsically reviewers but can review this PR")
-    priority = fields.Integer(default=2, index=True, group_operator=None)
+    priority = fields.Selection(related="batch_id.priority", inverse=lambda _: 1 / 0)
 
-    overrides = fields.Char(required=True, default='{}')
-    statuses = fields.Text(
-        compute='_compute_statuses',
-        help="Copy of the statuses from the HEAD commit, as a Python literal"
-    )
+    overrides = fields.Char(required=True, default='{}', tracking=True)
+    statuses = fields.Text(help="Copy of the statuses from the HEAD commit, as a Python literal", default="{}")
     statuses_full = fields.Text(
         compute='_compute_statuses',
-        help="Compilation of the full status of the PR (commit statuses + overrides), as JSON"
+        help="Compilation of the full status of the PR (commit statuses + overrides), as JSON",
+        store=True,
     )
-    status = fields.Char(compute='_compute_statuses')
+    status = fields.Selection([
+        ('pending', 'Pending'),
+        ('failure', 'Failure'),
+        ('success', 'Success'),
+    ], compute='_compute_statuses', store=True, column_type=enum(_name, 'status'))
     previous_failure = fields.Char(default='{}')
 
-    batch_id = fields.Many2one('runbot_merge.batch', string="Active Batch", compute='_compute_active_batch', store=True)
-    batch_ids = fields.Many2many('runbot_merge.batch', string="Batches", context={'active_test': False})
-    staging_id = fields.Many2one(related='batch_id.staging_id', store=True)
+    batch_id = fields.Many2one('runbot_merge.batch', index=True)
+    staging_id = fields.Many2one('runbot_merge.stagings', compute='_compute_staging', store=True)
+    staging_ids = fields.Many2many('runbot_merge.stagings', string="Stagings", compute='_compute_stagings', context={"active_test": False})
+
+    @api.depends('batch_id.staging_ids.active')
+    def _compute_staging(self):
+        for p in self:
+            p.staging_id = p.batch_id.staging_ids.filtered('active')
+
+    @api.depends('batch_id.staging_ids')
+    def _compute_stagings(self):
+        for p in self:
+            p.staging_ids = p.batch_id.staging_ids
+
     commits_map = fields.Char(help="JSON-encoded mapping of PR commits to actually integrated commits. The integration head (either a merge commit or the PR's topmost) is mapped from the 'empty' pr commit (the key is an empty string, because you can't put a null key in json maps).", default='{}')
 
     link_warned = fields.Boolean(
@@ -373,7 +413,7 @@ class PullRequests(models.Model):
     )
 
     blocked = fields.Char(
-        compute='_compute_is_blocked',
+        compute='_compute_is_blocked', store=True,
         help="PR is not currently stageable for some reason (mostly an issue if status is ready)"
     )
 
@@ -383,15 +423,43 @@ class PullRequests(models.Model):
     repo_name = fields.Char(related='repository.name')
     message_title = fields.Char(compute='_compute_message_title')
 
-    ping = fields.Char(compute='_compute_ping')
+    ping = fields.Char(compute='_compute_ping', recursive=True)
 
-    @api.depends('author.github_login', 'reviewed_by.github_login')
+    source_id = fields.Many2one('runbot_merge.pull_requests', index=True, help="the original source of this FP even if parents were detached along the way")
+    parent_id = fields.Many2one(
+        'runbot_merge.pull_requests', index=True,
+        help="a PR with a parent is an automatic forward port",
+        tracking=True,
+    )
+    root_id = fields.Many2one('runbot_merge.pull_requests', compute='_compute_root', recursive=True)
+    forwardport_ids = fields.One2many('runbot_merge.pull_requests', 'source_id')
+    limit_id = fields.Many2one('runbot_merge.branch', help="Up to which branch should this PR be forward-ported", tracking=True)
+
+    detach_reason = fields.Char()
+
+    _sql_constraints = [(
+        'fw_constraint',
+        'check(source_id is null or num_nonnulls(parent_id, detach_reason) = 1)',
+        "fw PRs must either be attached or have a reason for being detached",
+    )]
+
+    @api.depends('label')
+    def _compute_refname(self):
+        for pr in self:
+            pr.refname = pr.label.split(':', 1)[-1]
+
+    @api.depends(
+        'author.github_login', 'reviewed_by.github_login',
+        'source_id.author.github_login', 'source_id.reviewed_by.github_login',
+    )
     def _compute_ping(self):
         for pr in self:
-            s = ' '.join(
-                f'@{p.github_login}'
-                for p in (pr.author | pr.reviewed_by )
-            )
+            if source := pr.source_id:
+                contacts = source.author | source.reviewed_by | pr.reviewed_by
+            else:
+                contacts = pr.author | pr.reviewed_by
+
+            s = ' '.join(f'@{p.github_login}' for p in contacts)
             pr.ping = s and (s + ' ')
 
     @api.depends('repository.name', 'number')
@@ -403,6 +471,11 @@ class PullRequests(models.Model):
             pr.url = str(base.join(path))
             pr.github_url = str(gh_base.join(path))
 
+    @api.depends('parent_id.root_id')
+    def _compute_root(self):
+        for p in self:
+            p.root_id = reduce(lambda _, p: p, self._iter_ancestors())
+
     @api.depends('message')
     def _compute_message_title(self):
         for pr in self:
@@ -410,7 +483,7 @@ class PullRequests(models.Model):
 
     @api.depends('repository.name', 'number', 'message')
     def _compute_display_name(self):
-        return super(PullRequests, self)._compute_display_name()
+        return super()._compute_display_name()
 
     def name_get(self):
         name_template = '%(repo_name)s#%(number)d'
@@ -437,10 +510,7 @@ class PullRequests(models.Model):
 
     @property
     def _approved(self):
-        return self.state in ('approved', 'ready') or any(
-            p.priority == 0
-            for p in (self | self._linked_prs)
-        )
+        return self.state in ('approved', 'ready')
 
     @property
     def _ready(self):
@@ -448,89 +518,56 @@ class PullRequests(models.Model):
 
     @property
     def _linked_prs(self):
-        if re.search(r':patch-\d+', self.label):
-            return self.browse(())
-        if self.state == 'merged':
-            return self.with_context(active_test=False).batch_ids\
-                   .filtered(lambda b: b.staging_id.state == 'success')\
-                   .prs - self
-        return self.search([
-            ('target', '=', self.target.id),
-            ('label', '=', self.label),
-            ('state', 'not in', ('merged', 'closed')),
-        ]) - self
+        return self.batch_id.prs - self
 
-    # missing link to other PRs
-    @api.depends('priority', 'state', 'squash', 'merge_method', 'batch_id.active', 'label')
+    @property
+    def limit_pretty(self):
+        if self.limit_id:
+            return self.limit_id.name
+
+        branches = self.repository.project_id.branch_ids
+        if ((bf := self.repository.branch_filter) or '[]') != '[]':
+            branches = branches.filtered_domain(ast.literal_eval(bf))
+        return branches[:1].name
+
+    @api.depends(
+        'batch_id.prs.draft',
+        'batch_id.prs.squash',
+        'batch_id.prs.merge_method',
+        'batch_id.prs.state',
+        'batch_id.skipchecks',
+    )
     def _compute_is_blocked(self):
         self.blocked = False
+        requirements = (
+            lambda p: not p.draft,
+            lambda p: p.squash or p.merge_method,
+            lambda p: p.state == 'ready' \
+                  or p.batch_id.skipchecks \
+                 and all(pr.state != 'error' for pr in p.batch_id.prs)
+        )
+        messages = ('is in draft', 'has no merge method', 'is not ready')
         for pr in self:
             if pr.state in ('merged', 'closed'):
                 continue
 
-            linked = pr._linked_prs
-            # check if PRs are configured (single commit or merge method set)
-            if not (pr.squash or pr.merge_method):
-                pr.blocked = 'has no merge method'
-                continue
-            other_unset = next((p for p in linked if not (p.squash or p.merge_method)), None)
-            if other_unset:
-                pr.blocked = "linked PR %s has no merge method" % other_unset.display_name
-                continue
+            blocking, message = next((
+                (blocking, message)
+                for blocking in pr.batch_id.prs
+                for requirement, message in zip(requirements, messages)
+                if not requirement(blocking)
+            ), (None, None))
+            if blocking == pr:
+                pr.blocked = message
+            elif blocking:
+                pr.blocked = f"linked PR {blocking.display_name} {message}"
 
-            # check if any PR in the batch is p=0 and none is in error
-            if any(p.priority == 0 for p in (pr | linked)):
-                if pr.state == 'error':
-                    pr.blocked = "in error"
-                other_error = next((p for p in linked if p.state == 'error'), None)
-                if other_error:
-                    pr.blocked = "linked pr %s in error" % other_error.display_name
-                # if none is in error then none is blocked because p=0
-                # "unblocks" the entire batch
-                continue
-
-            if pr.state != 'ready':
-                pr.blocked = 'not ready'
-                continue
-
-            unready = next((p for p in linked if p.state != 'ready'), None)
-            if unready:
-                pr.blocked = 'linked pr %s is not ready' % unready.display_name
-                continue
-
-    def _get_overrides(self):
+    def _get_overrides(self) -> dict[str, dict[str, str]]:
+        if self.parent_id:
+            return self.parent_id._get_overrides() | json.loads(self.overrides)
         if self:
             return json.loads(self.overrides)
         return {}
-
-    @api.depends('head', 'repository.status_ids', 'overrides')
-    def _compute_statuses(self):
-        Commits = self.env['runbot_merge.commit']
-        for pr in self:
-            c = Commits.search([('sha', '=', pr.head)])
-            st = json.loads(c.statuses or '{}')
-            statuses = {**st, **pr._get_overrides()}
-            pr.statuses_full = json.dumps(statuses)
-            if not statuses:
-                pr.status = pr.statuses = False
-                continue
-
-            pr.statuses = pprint.pformat(st)
-
-            st = 'success'
-            for ci in pr.repository.status_ids._for_pr(pr):
-                v = (statuses.get(ci.context) or {'state': 'pending'})['state']
-                if v in ('error', 'failure'):
-                    st = 'failure'
-                    break
-                if v == 'pending':
-                    st = 'pending'
-            pr.status = st
-
-    @api.depends('batch_ids.active')
-    def _compute_active_batch(self):
-        for r in self:
-            r.batch_id = r.batch_ids.filtered(lambda b: b.active)[:1]
 
     def _get_or_schedule(self, repo_name, number, *, target=None, closing=False):
         repo = self.env['runbot_merge.repository'].search([('name', '=', repo_name)])
@@ -561,71 +598,56 @@ class PullRequests(models.Model):
             'closing': closing,
         })
 
-    def _parse_command(self, commandstring):
-        for m in re.finditer(
-            r'(\S+?)(?:([+-])|=(\S*))?(?=\s|$)',
-            commandstring,
-        ):
-            name, flag, param = m.groups()
-            if name == 'r':
-                name = 'review'
-            if flag in ('+', '-'):
-                yield name, flag == '+'
-            elif name == 'delegate':
-                if param:
-                    for p in param.split(','):
-                        yield 'delegate', p.lstrip('#@')
-            elif name == 'override':
-                if param:
-                    for p in param.split(','):
-                        yield 'override', p
-            elif name in ('p', 'priority'):
-                if param in ('0', '1', '2'):
-                    yield ('priority', int(param))
-            elif any(name == k for k, _ in type(self).merge_method.selection):
-                yield ('method', name)
-            else:
-                yield name, param
+    def _iter_ancestors(self) -> Iterator[PullRequests]:
+        while self:
+            yield self
+            self = self.parent_id
+
+    def _iter_descendants(self) -> Iterator[PullRequests]:
+        pr = self
+        while pr := self.search([('parent_id', '=', pr.id)]):
+            yield pr
 
     def _parse_commands(self, author, comment, login):
-        """Parses a command string prefixed by Project::github_prefix.
-
-        A command string can contain any number of space-separated commands:
-
-        retry
-          resets a PR in error mode to ready for staging
-        r(eview)+/-
-           approves or disapproves a PR (disapproving just cancels an approval)
-        delegate+/delegate=<users>
-          adds either PR author or the specified (github) users as
-          authorised reviewers for this PR. ``<users>`` is a
-          comma-separated list of github usernames (no @)
-        p(riority)=2|1|0
-          sets the priority to normal (2), pressing (1) or urgent (0).
-          Lower-priority PRs are selected first and batched together.
-        rebase+/-
-          Whether the PR should be rebased-and-merged (the default) or just
-          merged normally.
-        """
         assert self, "parsing commands must be executed in an actual PR"
 
         (login, name) = (author.github_login, author.display_name) if author else (login, 'not in system')
 
-        is_admin, is_reviewer, is_author = self._pr_acl(author)
-
-        commands = [
-            ps
-            for m in self.repository.project_id._find_commands(comment['body'] or '')
-            for ps in self._parse_command(m)
-        ]
-
-        if not commands:
-            _logger.info("found no commands in comment of %s (%s) (%s)", author.github_login, author.display_name,
+        commandlines = self.repository.project_id._find_commands(comment['body'] or '')
+        if not commandlines:
+            _logger.info("found no commands in comment of %s (%s) (%s)", login, name,
                  utils.shorten(comment['body'] or '', 50)
             )
             return 'ok'
 
-        if not (is_author or any(cmd == 'override' for cmd, _ in commands)):
+        def feedback(message: Optional[str] = None, close: bool = False):
+            self.env['runbot_merge.pull_requests.feedback'].create({
+                'repository': self.repository.id,
+                'pull_request': self.number,
+                'message': message,
+                'close': close,
+            })
+        try:
+            cmds: List[commands.Command] = [
+                ps
+                for line in commandlines
+                for ps in commands.Parser(line)
+            ]
+        except Exception as e:
+            _logger.info(
+                "error %s while parsing comment of %s (%s): %s",
+                e,
+                login, name,
+                utils.shorten(comment['body'] or '', 50),
+                exc_info=True
+            )
+            feedback(message=f"@{login} {e.args[0]}")
+            return 'error'
+
+        is_admin, is_reviewer, is_author = self._pr_acl(author)
+        _source_admin, source_reviewer, source_author = self.source_id._pr_acl(author)
+
+        if not (is_author or self.source_id or (any(isinstance(cmd, commands.Override) for cmd in cmds) and author.override_rights)):
             # no point even parsing commands
             _logger.info("ignoring comment of %s (%s): no ACL to %s",
                           login, name, self.display_name)
@@ -636,165 +658,346 @@ class PullRequests(models.Model):
             )
             return 'ignored'
 
-        applied, ignored = [], []
-        def reformat(command, param):
-            if param is None:
-                pstr = ''
-            elif isinstance(param, bool):
-                pstr = '+' if param else '-'
-            elif isinstance(param, list):
-                pstr = '=' + ','.join(param)
-            else:
-                pstr = '={}'.format(param)
-
-            return '%s%s' % (command, pstr)
-        msgs = []
-        for command, param in commands:
-            ok = False
+        rejections = []
+        for command in cmds:
             msg = None
-            if command == 'retry':
-                if is_author:
-                    if self.state == 'error':
-                        ok = True
-                        self.state = 'ready'
-                    else:
-                        msg = "retry makes no sense when the PR is not in error."
-            elif command == 'check':
-                if is_author:
-                    self.env['runbot_merge.fetch_job'].create({
-                        'repository': self.repository.id,
-                        'number': self.number,
-                    })
-                    ok = True
-            elif command == 'review':
-                if self.draft:
+            match command:
+                case commands.Approve() if self.draft:
                     msg = "draft PRs can not be approved."
-                elif param and is_reviewer:
-                    oldstate = self.state
-                    newstate = RPLUS.get(self.state)
-                    if not author.email:
-                        msg = "I must know your email before you can review PRs. Please contact an administrator."
-                    elif not newstate:
-                        msg = "this PR is already reviewed, reviewing it again is useless."
+                case commands.Approve() if self.parent_id:
+                    # rules are a touch different for forwardport PRs:
+                    valid = lambda _: True if command.ids is None else lambda n: n in command.ids
+                    _, source_reviewer, source_author = self.source_id._pr_acl(author)
+
+                    ancestors = list(self._iter_ancestors())
+                    # - reviewers on the original can approve any forward port
+                    if source_reviewer:
+                        approveable = ancestors
                     else:
-                        self.state = newstate
-                        self.reviewed_by = author
-                        ok = True
-                    _logger.debug(
-                        "r+ on %s by %s (%s->%s) status=%s message? %s",
-                        self.display_name, author.github_login,
-                        oldstate, newstate or oldstate,
-                        self.status, self.status == 'failure'
-                    )
-                    if self.status == 'failure':
-                        # the normal infrastructure is for failure and
-                        # prefixes messages with "I'm sorry"
-                        self.env.ref("runbot_merge.command.approve.failure")._send(
-                            repository=self.repository,
-                            pull_request=self.number,
-                            format_args={'user': login, 'pr': self},
-                        )
-                elif not param and is_author:
-                    newstate = RMINUS.get(self.state)
-                    if self.priority == 0 or newstate:
-                        if newstate:
-                            self.state = newstate
-                        if self.priority == 0:
-                            self.priority = 1
+                        # between the first merged ancestor and self
+                        mergeors = list(itertools.dropwhile(
+                            lambda p: p.state != 'merged',
+                            reversed(ancestors),
+                        ))
+                        # between the first ancestor the current user can review and self
+                        reviewors = list(itertools.dropwhile(
+                            lambda p: not p._pr_acl(author).is_reviewer,
+                            reversed(ancestors),
+                        ))
+
+                        # source author can approve any descendant of a merged
+                        # forward port (or source), people with review rights
+                        # to a forward port have review rights to its
+                        # descendants, if both apply use the most favorable
+                        # (largest number of PRs)
+                        if source_author and len(mergeors) > len(reviewors):
+                            approveable = mergeors
+                        else:
+                            approveable = reviewors
+
+                    if approveable:
+                        for pr in approveable:
+                            if not (pr.state in RPLUS and valid(pr.number)):
+                                continue
+                            msg = pr._approve(author, login)
+                            if msg:
+                                break
+                    else:
+                        msg = f"you can't {command} you silly little bean."
+                case commands.Approve() if is_reviewer:
+                    if command.ids is not None and command.ids != [self.number]:
+                        msg = f"tried to approve PRs {command.ids} but the current PR is {self.number}"
+                    else:
+                        msg = self._approve(author, login)
+                case commands.Reject() if is_author:
+                    if self.batch_id.skipchecks or self.reviewed_by:
+                        if self.error:
+                            self.error = False
+                        if self.reviewed_by:
+                            self.reviewed_by = False
+                        if self.batch_id.skipchecks:
+                            self.batch_id.skipchecks = False
                             self.env.ref("runbot_merge.command.unapprove.p0")._send(
                                 repository=self.repository,
                                 pull_request=self.number,
                                 format_args={'user': login, 'pr': self},
                             )
                         self.unstage("unreviewed (r-) by %s", login)
-                        ok = True
                     else:
                         msg = "r- makes no sense in the current PR state."
-            elif command == 'delegate':
-                if is_reviewer:
-                    ok = True
-                    Partners = self.env['res.partner']
-                    if param is True:
-                        delegate = self.author
-                    else:
-                        delegate = Partners.search([('github_login', '=', param)]) or Partners.create({
-                            'name': param,
-                            'github_login': param,
-                        })
-                    delegate.write({'delegate_reviewer': [(4, self.id, 0)]})
-            elif command == 'priority':
-                if is_admin:
-                    ok = True
-                    self.priority = param
-                    if param == 0:
-                        self.target.active_staging_id.cancel(
-                            "P=0 on %s by %s, unstaging target %s",
-                            self.display_name,
-                            author.github_login, self.target.name,
-                        )
-            elif command == 'method':
-                if is_reviewer:
-                    self.merge_method = param
-                    ok = True
-                    explanation = next(label for value, label in type(self).merge_method.selection if value == param)
+                case commands.MergeMethod() if is_reviewer:
+                    self.merge_method = command.value
+                    explanation = next(label for value, label in type(self).merge_method.selection if value == command.value)
                     self.env.ref("runbot_merge.command.method")._send(
                         repository=self.repository,
                         pull_request=self.number,
                         format_args={'new_method': explanation, 'pr': self, 'user': login},
                     )
-            elif command == 'override':
-                overridable = author.override_rights\
-                    .filtered(lambda r: not r.repository_id or (r.repository_id == self.repository))\
-                    .mapped('context')
-                if param in overridable:
-                    self.overrides = json.dumps({
-                        **json.loads(self.overrides),
-                        param: {
-                            'state': 'success',
-                            'target_url': comment['html_url'],
-                            'description': f"Overridden by @{author.github_login}",
-                        },
-                    })
-                    c = self.env['runbot_merge.commit'].search([('sha', '=', self.head)])
-                    if c:
-                        c.to_check = True
+                case commands.Retry() if is_author or source_author:
+                    if self.error:
+                        self.error = False
                     else:
-                        c.create({'sha': self.head, 'statuses': '{}'})
-                    ok = True
-                else:
-                    msg = "you are not allowed to override this status."
-            else:
-                # ignore unknown commands
-                continue
+                        msg = "retry makes no sense when the PR is not in error."
+                case commands.Check() if is_author:
+                    self.env['runbot_merge.fetch_job'].create({
+                        'repository': self.repository.id,
+                        'number': self.number,
+                    })
+                case commands.Delegate(users) if is_reviewer:
+                    if not users:
+                        delegates = self.author
+                    else:
+                        delegates = self.env['res.partner']
+                        for login in users:
+                            delegates |= delegates.search([('github_login', '=', login)]) or delegates.create({
+                                'name': login,
+                                'github_login': login,
+                            })
+                    delegates.write({'delegate_reviewer': [(4, self.id, 0)]})
+                case commands.Priority() if is_admin:
+                    self.batch_id.priority = str(command)
+                case commands.SkipChecks() if is_admin:
+                    self.batch_id.skipchecks = True
+                    self.reviewed_by = author
+                    for p in self.batch_id.prs - self:
+                        if not p.reviewed_by:
+                            p.reviewed_by = author
+                case commands.CancelStaging() if is_admin:
+                    self.batch_id.cancel_staging = True
+                    if not self.batch_id.blocked:
+                        self.target.active_staging_id.cancel(
+                            "Unstaged by %s on %s",
+                            author.github_login, self.display_name,
+                        )
+                case commands.Override(statuses):
+                    for status in statuses:
+                        overridable = author.override_rights\
+                            .filtered(lambda r: not r.repository_id or (r.repository_id == self.repository))\
+                            .mapped('context')
+                        if status in overridable:
+                            self.overrides = json.dumps({
+                                **json.loads(self.overrides),
+                                status: {
+                                    'state': 'success',
+                                    'target_url': comment['html_url'],
+                                    'description': f"Overridden by @{author.github_login}",
+                                },
+                            })
+                            c = self.env['runbot_merge.commit'].search([('sha', '=', self.head)])
+                            if c:
+                                c.to_check = True
+                            else:
+                                c.create({'sha': self.head, 'statuses': '{}'})
+                        else:
+                            msg = f"you are not allowed to override {status!r}."
+                # FW
+                case commands.Close() if source_author:
+                    feedback(close=True)
+                case commands.FW():
+                    if source_reviewer or is_reviewer:
+                        (self.source_id or self).batch_id.fw_policy = command.name.lower()
+                        match command:
+                            case commands.FW.DEFAULT:
+                                message = "Waiting for CI to create followup forward-ports."
+                            case commands.FW.SKIPCI:
+                                message = "Not waiting for CI to create followup forward-ports."
+                            case commands.FW.SKIPMERGE:
+                                message = "Not waiting for merge to create followup forward-ports."
+                        feedback(message=message)
+                    else:
+                        msg = "you can't configure forward-port CI."
+                case commands.Limit(branch) if is_author:
+                    limit = branch or self.target.name
+                    for p in self.batch_id.prs:
+                        ping, m = p._maybe_update_limit(limit)
 
-            _logger.info(
-                "%s %s(%s) on %s by %s (%s)",
-                "applied" if ok else "ignored",
-                command, param, self.display_name,
-                author.github_login, author.display_name,
+                        if ping and p == self:
+                            msg = m
+                        else:
+                            if ping:
+                                m = f"@{login} {m}"
+                            self.env['runbot_merge.pull_requests.feedback'].create({
+                                'repository': p.repository.id,
+                                'pull_request': p.number,
+                                'message': m,
+                            })
+                case commands.Limit():
+                    msg = "you can't set a forward-port limit."
+                # NO!
+                case _:
+                    msg = f"you can't {command}. Skill issue."
+            if msg is not None:
+                rejections.append(msg)
+
+        cmdstr = ', '.join(map(str, cmds))
+        if not rejections:
+            _logger.info("%s (%s) applied %s", login, name, cmdstr)
+            self.env.cr.precommit.data['change-author'] = author.id
+            return 'applied ' + cmdstr
+
+        self.env.cr.rollback()
+        rejections_list = ''.join(f'\n- {r}' for r in rejections)
+        _logger.info("%s (%s) tried to apply %s%s", login, name, cmdstr, rejections_list)
+        footer = '' if len(cmds) == len(rejections) else "\n\nFor your own safety I've ignored everything in your comment."
+        if rejections_list:
+            rejections = ' ' + rejections_list.removeprefix("\n- ") if rejections_list.count('\n- ') == 1 else rejections_list
+            feedback(message=f"@{login}{rejections}{footer}")
+        return 'rejected'
+
+    def _maybe_update_limit(self, limit: str) -> Tuple[bool, str]:
+        limit_id = self.env['runbot_merge.branch'].with_context(active_test=False).search([
+            ('project_id', '=', self.repository.project_id.id),
+            ('name', '=', limit),
+        ])
+        if not limit_id:
+            return True, f"there is no branch {limit!r}, it can't be used as a forward port target."
+
+        if limit_id != self.target and not limit_id.active:
+            return True, f"branch {limit_id.name!r} is disabled, it can't be used as a forward port target."
+
+        # not forward ported yet, just acknowledge the request
+        if not self.source_id and self.state != 'merged':
+            self.limit_id = limit_id
+            if branch_key(limit_id) <= branch_key(self.target):
+                return False, "Forward-port disabled."
+            else:
+                return False, f"Forward-porting to {limit_id.name!r}."
+
+        # if the PR has been forwardported
+        prs = (self | self.forwardport_ids | self.source_id | self.source_id.forwardport_ids)
+        tip = max(prs, key=pr_key)
+        # if the fp tip was closed it's fine
+        if tip.state == 'closed':
+            return True, f"{tip.display_name} is closed, no forward porting is going on"
+
+        prs.limit_id = limit_id
+
+        real_limit = max(limit_id, tip.target, key=branch_key)
+
+        addendum = ''
+        # check if tip was queued for forward porting, try to cancel if we're
+        # supposed to stop here
+        if real_limit == tip.target and (task := self.env['forwardport.batches'].search([('batch_id', '=', tip.batch_id.id)])):
+            try:
+                with self.env.cr.savepoint():
+                    self.env.cr.execute(
+                        "SELECT FROM forwardport_batches "
+                        "WHERE id = %s FOR UPDATE NOWAIT",
+                        [task.id])
+            except psycopg2.errors.LockNotAvailable:
+                # row locked = port occurring and probably going to succeed,
+                # so next(real_limit) likely a done deal already
+                return True, (
+                    f"Forward port of {tip.display_name} likely already "
+                    f"ongoing, unable to cancel, close next forward port "
+                    f"when it completes.")
+            else:
+                self.env.cr.execute("DELETE FROM forwardport_batches WHERE id = %s", [task.id])
+
+        if real_limit != tip.target:
+            # forward porting was previously stopped at tip, and we want it to
+            # resume
+            if tip.state == 'merged':
+                self.env['forwardport.batches'].create({
+                    'batch_id': tip.batch_id.id,
+                    'source': 'fp' if tip.parent_id else 'merge',
+                })
+                resumed = tip
+            else:
+                resumed = tip.batch_id._schedule_fp_followup()
+            if resumed:
+                addendum += f', resuming forward-port stopped at {tip.display_name}'
+
+        if real_limit != limit_id:
+            addendum += f' (instead of the requested {limit_id.name!r} because {tip.display_name} already exists)'
+
+        # get a "stable" root rather than self's to avoid divertences between
+        # PRs across a root divide (where one post-root would point to the root,
+        # and one pre-root would point to the source, or a previous root)
+        root = tip.root_id
+        # reference the root being forward ported unless we are the root
+        root_ref = '' if root == self else f' {root.display_name}'
+        msg = f"Forward-porting{root_ref} to {real_limit.name!r}{addendum}."
+        # send a message to the source & root except for self, if they exist
+        root_msg = f'Forward-porting to {real_limit.name!r} (from {self.display_name}).'
+        self.env['runbot_merge.pull_requests.feedback'].create([
+            {
+                'repository': p.repository.id,
+                'pull_request': p.number,
+                'message': root_msg,
+                'token_field': 'fp_github_token',
+            }
+            # send messages to source and root unless root is self (as it
+            # already gets the normal message)
+            for p in (self.source_id | root) - self
+        ])
+
+        return False, msg
+
+
+    def _find_next_target(self) -> Optional[Branch]:
+        """ Finds the branch between target and limit_id which follows
+        reference
+        """
+        root = (self.source_id or self)
+        if self.target == root.limit_id:
+            return None
+
+        branches = root.target.project_id.with_context(active_test=False)._forward_port_ordered()
+        if (branch_filter := self.repository.branch_filter) and branch_filter != '[]':
+            branches = branches.filtered_domain(ast.literal_eval(branch_filter))
+
+        branches = list(branches)
+        from_ = branches.index(self.target) + 1
+        to_ = branches.index(root.limit_id) + 1 if root.limit_id else None
+
+        # return the first active branch in the set
+        return next((
+            branch
+            for branch in branches[from_:to_]
+            if branch.active
+        ), None)
+
+
+    def _approve(self, author, login):
+        oldstate = self.state
+        newstate = RPLUS.get(self.state)
+        msg = None
+        if not author.email:
+            msg = "I must know your email before you can review PRs. Please contact an administrator."
+        elif not newstate:
+            msg = "this PR is already reviewed, reviewing it again is useless."
+        else:
+            self.reviewed_by = author
+        _logger.debug(
+            "r+ on %s by %s (%s->%s) status=%s message? %s",
+            self.display_name, author.github_login,
+            oldstate, newstate or oldstate,
+            self.status, self.status == 'failure'
+        )
+        if self.status == 'failure':
+            # the normal infrastructure is for failure and
+            # prefixes messages with "I'm sorry"
+            self.env.ref("runbot_merge.command.approve.failure")._send(
+                repository=self.repository,
+                pull_request=self.number,
+                format_args={'user': login, 'pr': self},
             )
-            if ok:
-                applied.append(reformat(command, param))
-            else:
-                ignored.append(reformat(command, param))
-                msgs.append(msg or "you can't {}.".format(reformat(command, param)))
+        return msg
 
-        if msgs:
-            joiner = ' ' if len(msgs) == 1 else '\n- '
-            msgs.insert(0, "I'm sorry, @{}:".format(login))
-            self.env['runbot_merge.pull_requests.feedback'].create({
-                'repository': self.repository.id,
-                'pull_request': self.number,
-                'message': joiner.join(msgs),
-            })
+    def message_post(self, **kw):
+        if author := self.env.cr.precommit.data.get('change-author'):
+            kw['author_id'] = author
+        if message := self.env.cr.precommit.data.get('change-message'):
+            kw['body'] = html_escape(message)
+        return super().message_post(**kw)
 
-        msg = []
-        if applied:
-            msg.append('applied ' + ' '.join(applied))
-        if ignored:
-            ignoredstr = ' '.join(ignored)
-            msg.append('ignored ' + ignoredstr)
-        return '\n'.join(msg)
+    def _message_log(self, **kw):
+        if author := self.env.cr.precommit.data.get('change-author'):
+            kw['author_id'] = author
+        if message := self.env.cr.precommit.data.get('change-message'):
+            kw['body'] = html_escape(message)
+        return super()._message_log(**kw)
 
     def _pr_acl(self, user):
         if not self:
@@ -814,29 +1017,72 @@ class PullRequests(models.Model):
         # could have two PRs (e.g. one open and one closed) at least
         # temporarily on the same head, or on the same head with different
         # targets
-        failed = self.browse(())
+        updateable = self.filtered(lambda p: p.state != 'merged')
+        updateable.statuses = statuses
+        for pr in updateable:
+            if pr.status == "failure":
+                statuses = json.loads(pr.statuses_full)
+                for ci in pr.repository.status_ids._for_pr(pr).mapped('context'):
+                    status = statuses.get(ci) or {'state': 'pending'}
+                    if status['state'] in ('error', 'failure'):
+                        pr._notify_ci_new_failure(ci, status)
+
+    def modified(self, fnames, create=False, before=False):
+        """ By default, Odoo can't express recursive *dependencies* which is
+        exactly what we need for statuses: they depend on the current PR's
+        overrides, and the parent's overrides, and *its* parent's overrides, ...
+
+        One option would be to create a stored computed field which accumulates
+        the overrides as *fields* can be recursive, but...
+        """
+        if 'overrides' in fnames:
+            descendants_or_self = self.concat(*self._iter_descendants())
+            self.env.add_to_compute(self._fields['status'], descendants_or_self)
+            self.env.add_to_compute(self._fields['statuses_full'], descendants_or_self)
+            self.env.add_to_compute(self._fields['state'], descendants_or_self)
+        super().modified(fnames, create, before)
+
+    @api.depends(
+        'statuses', 'overrides', 'target', 'parent_id',
+        'repository.status_ids.context',
+        'repository.status_ids.branch_filter',
+        'repository.status_ids.prs',
+    )
+    def _compute_statuses(self):
         for pr in self:
-            required = pr.repository.status_ids._for_pr(pr).mapped('context')
-            sts = {**statuses, **pr._get_overrides()}
+            statuses = {**json.loads(pr.statuses), **pr._get_overrides()}
 
-            success = True
-            for ci in required:
-                status = sts.get(ci) or {'state': 'pending'}
-                result = status['state']
-                if result == 'success':
-                    continue
+            pr.statuses_full = json.dumps(statuses, indent=4)
 
-                success = False
-                if result in ('error', 'failure'):
-                    failed |= pr
-                    pr._notify_ci_new_failure(ci, status)
-            if success:
-                oldstate = pr.state
-                if oldstate == 'opened':
-                    pr.state = 'validated'
-                elif oldstate == 'approved':
-                    pr.state = 'ready'
-        return failed
+            st = 'success'
+            for ci in pr.repository.status_ids._for_pr(pr):
+                v = (statuses.get(ci.context) or {'state': 'pending'})['state']
+                if v in ('error', 'failure'):
+                    st = 'failure'
+                    break
+                if v == 'pending':
+                    st = 'pending'
+            pr.status = st
+
+    @api.depends(
+        "status", "reviewed_by", "closed", "error" ,
+        "batch_id.merge_date",
+        "batch_id.skipchecks",
+    )
+    def _compute_state(self):
+        for pr in self:
+            if pr.batch_id.merge_date:
+                pr.state = 'merged'
+            elif pr.closed:
+                pr.state = "closed"
+            elif pr.error:
+                pr.state = "error"
+            elif pr.batch_id.skipchecks: # skipchecks behaves as both approval and status override
+                pr.state = "ready"
+            else:
+                states = ("opened", "approved", "validated", "ready")
+                pr.state = states[bool(pr.reviewed_by) | ((pr.status == "success") << 1)]
+
 
     def _notify_ci_new_failure(self, ci, st):
         prev = json.loads(self.previous_failure)
@@ -883,7 +1129,19 @@ class PullRequests(models.Model):
             )
 
     def _auto_init(self):
-        super(PullRequests, self)._auto_init()
+        for field in self._fields.values():
+            if not isinstance(field, fields.Selection) or field.column_type[0] == 'varchar':
+                continue
+
+            t = field.column_type[1]
+            self.env.cr.execute("SELECT 1 FROM pg_type WHERE typname = %s", [t])
+            if not self.env.cr.rowcount:
+                self.env.cr.execute(
+                    f"CREATE TYPE {t} AS ENUM %s",
+                    [tuple(s for s, _ in field.selection)]
+                )
+
+        super()._auto_init()
         # incorrect index: unique(number, target, repository).
         tools.drop_index(self._cr, 'runbot_merge_unique_pr_per_target', self._table)
         # correct index:
@@ -899,11 +1157,38 @@ class PullRequests(models.Model):
             return 'staged'
         return self.state
 
+    def _get_batch(self, *, target, label):
+        batch = self.env['runbot_merge.batch']
+        if not re.search(r':patch-\d+$', label):
+            batch = batch.search([
+                ('merge_date', '=', False),
+                ('prs.target', '=', target),
+                ('prs.label', '=', label),
+            ])
+        return batch or batch.create({})
+
     @api.model
     def create(self, vals):
+        batch = self._get_batch(target=vals['target'], label=vals['label'])
+        vals['batch_id'] = batch.id
+        if 'limit_id' not in vals:
+            limits = {p.limit_id for p in batch.prs}
+            if len(limits) == 1:
+                vals['limit_id'] = limits.pop().id
+            elif limits:
+                repo = self.env['runbot_merge.repository'].browse(vals['repository'])
+                _logger.warning(
+                    "Unable to set limit on %s#%s: found multiple limits in batch (%s)",
+                    repo.name, vals['number'],
+                    ', '.join(
+                        f'{p.display_name} => {p.limit_id.name}'
+                        for p in batch.prs
+                    )
+                )
+
         pr = super().create(vals)
         c = self.env['runbot_merge.commit'].search([('sha', '=', pr.head)])
-        pr._validate(json.loads(c.statuses or '{}'))
+        pr._validate(c.statuses or '{}')
 
         if pr.state not in ('closed', 'merged'):
             self.env.ref('runbot_merge.pr.created')._send(
@@ -929,7 +1214,7 @@ class PullRequests(models.Model):
             ], limit=1)
 
         return self.env['runbot_merge.pull_requests'].create({
-            'state': 'opened' if description['state'] == 'open' else 'closed',
+            'closed': description['state'] != 'open',
             'number': description['number'],
             'label': repo._remap_label(description['head']['label']),
             'author': author.id,
@@ -944,31 +1229,44 @@ class PullRequests(models.Model):
     def write(self, vals):
         if vals.get('squash'):
             vals['merge_method'] = False
-        prev = None
-        if 'target' in vals or 'message' in vals:
-            prev = {
-                pr.id: {'target': pr.target, 'message': pr.message}
-                for pr in self
-            }
 
+        # when explicitly marking a PR as ready
+        if vals.get('state') == 'ready':
+            # skip validation
+            self.batch_id.skipchecks = True
+            # mark current user as reviewer
+            vals.setdefault('reviewed_by', self.env.user.partner_id.id)
+            for p in self.batch_id.prs - self:
+                if not p.reviewed_by:
+                    p.reviewed_by = self.env.user.partner_id.id
+
+        for pr in self:
+            if (t := vals.get('target')) is not None and pr.target.id != t:
+                pr.unstage(
+                    "target (base) branch was changed from %r to %r",
+                    pr.target.display_name,
+                    self.env['runbot_merge.branch'].browse(t).display_name,
+                )
+
+            if 'message' in vals:
+                merge_method = vals['merge_method'] if 'merge_method' in vals else pr.merge_method
+                if merge_method not in (False, 'rebase-ff') and pr.message != vals['message']:
+                    pr.unstage("merge message updated")
+
+        match vals.get('closed'):
+            case True if not self.closed:
+                vals['reviewed_by'] = False
+            case False if self.closed and not self.batch_id:
+                vals['batch_id'] = self._get_batch(
+                    target=vals.get('target') or self.target.id,
+                    label=vals.get('label') or self.label,
+                )
         w = super().write(vals)
 
         newhead = vals.get('head')
         if newhead:
             c = self.env['runbot_merge.commit'].search([('sha', '=', newhead)])
-            self._validate(json.loads(c.statuses or '{}'))
-
-        if prev:
-            for pr in self:
-                old_target = prev[pr.id]['target']
-                if pr.target != old_target:
-                    pr.unstage(
-                        "target (base) branch was changed from %r to %r",
-                        old_target.display_name, pr.target.display_name,
-                    )
-                old_message = prev[pr.id]['message']
-                if pr.merge_method not in (False, 'rebase-ff') and pr.message != old_message:
-                    pr.unstage("merge message updated")
+            self._validate(c.statuses or '{}')
         return w
 
     def _check_linked_prs_statuses(self, commit=False):
@@ -1000,8 +1298,6 @@ class PullRequests(models.Model):
               bool_or(pr.state = 'ready' AND NOT pr.link_warned)
           -- one of the others should be unready
           AND bool_or(pr.state != 'ready')
-          -- but ignore batches with one of the prs at p0
-          AND bool_and(pr.priority != 0)
         """)
         for [ids] in self.env.cr.fetchall():
             prs = self.browse(ids)
@@ -1062,16 +1358,13 @@ class PullRequests(models.Model):
         """ If the PR is staged, cancel the staging. If the PR is split and
         waiting, remove it from the split (possibly delete the split entirely)
         """
-        split_batches = self.with_context(active_test=False).mapped('batch_ids').filtered('split_id')
-        if len(split_batches) > 1:
-            _logger.warning("Found a PR linked with more than one split batch: %s (%s)", self, split_batches)
-        for b in split_batches:
-            if len(b.split_id.batch_ids) == 1:
-                # only the batch of this PR -> delete split
-                b.split_id.unlink()
-            else:
-                # else remove this batch from the split
-                b.split_id = False
+        split = self.batch_id.split_id
+        if len(split.batch_ids) == 1:
+            # only the batch of this PR -> delete split
+            split.unlink()
+        else:
+            # else remove this batch from the split
+            self.batch_id.split_id = False
 
         self.staging_id.cancel('%s ' + reason, self.display_name, *args)
 
@@ -1079,32 +1372,93 @@ class PullRequests(models.Model):
         # ignore if the PR is already being updated in a separate transaction
         # (most likely being merged?)
         self.env.cr.execute('''
-        SELECT id, state FROM runbot_merge_pull_requests
-        WHERE id = %s AND state != 'merged'
+        SELECT batch_id FROM runbot_merge_pull_requests
+        WHERE id = %s AND state != 'merged' AND state != 'closed'
         FOR UPDATE SKIP LOCKED;
         ''', [self.id])
-        if not self.env.cr.fetchone():
+        r = self.env.cr.fetchone()
+        if not r:
             return False
 
-        self.env.cr.execute('''
-        UPDATE runbot_merge_pull_requests
-        SET state = 'closed'
-        WHERE id = %s
-        ''', [self.id])
-        self.env.cr.commit()
-        self.modified(['state'])
         self.unstage("closed by %s", by)
+        self.write({'closed': True, 'reviewed_by': False})
+
         return True
+
+    def _fp_conflict_feedback(self, previous_pr, conflicts):
+        (h, out, err, hh) = conflicts.get(previous_pr) or (None, None, None, None)
+        if h:
+            sout = serr = ''
+            if out.strip():
+                sout = f"\nstdout:\n```\n{out}\n```\n"
+            if err.strip():
+                serr = f"\nstderr:\n```\n{err}\n```\n"
+
+            lines = ''
+            if len(hh) > 1:
+                lines = '\n' + ''.join(
+                    '* %s%s\n' % (sha, ' <- on this commit' if sha == h else '')
+                    for sha in hh
+                )
+            template = 'runbot_merge.forwardport.failure'
+            format_args = {
+                'pr': self,
+                'commits': lines,
+                'stdout': sout,
+                'stderr': serr,
+                'footer': FOOTER,
+            }
+        elif any(conflicts.values()):
+            template = 'runbot_merge.forwardport.linked'
+            format_args = {
+                'pr': self,
+                'siblings': ', '.join(p.display_name for p in (self.batch_id - self)),
+                'footer': FOOTER,
+            }
+        elif not self._find_next_target():
+            ancestors = "".join(
+                f"* {p.display_name}\n"
+                for p in previous_pr._iter_ancestors()
+                if p.parent_id
+                if p.state not in ('closed', 'merged')
+                if p.target.active
+            )
+            template = 'runbot_merge.forwardport.final'
+            format_args = {
+                'pr': self,
+                'containing': ' containing:' if ancestors else '.',
+                'ancestors': ancestors,
+                'footer': FOOTER,
+            }
+        else:
+            template = 'runbot_merge.forwardport.intermediate'
+            format_args = {
+                'pr': self,
+                'footer': FOOTER,
+            }
+        self.env.ref(template)._send(
+            repository=self.repository,
+            pull_request=self.number,
+            token_field='fp_github_token',
+            format_args=format_args,
+        )
+
+# ordering is a bit unintuitive because the lowest sequence (and name)
+# is the last link of the fp chain, reasoning is a bit more natural the
+# other way around (highest object is the last), especially with Python
+# not really having lazy sorts in the stdlib
+def branch_key(b: Branch, /, _key=itemgetter('sequence', 'name')):
+    return Reverse(_key(b))
+
+
+def pr_key(p: PullRequests, /):
+    return branch_key(p.target)
+
 
 # state changes on reviews
 RPLUS = {
     'opened': 'approved',
     'validated': 'ready',
-}
-RMINUS = {
-    'approved': 'opened',
-    'ready': 'validated',
-    'error': 'validated',
 }
 
 _TAGS = {
@@ -1198,10 +1552,10 @@ class Feedback(models.Model):
     """
     _name = _description = 'runbot_merge.pull_requests.feedback'
 
-    repository = fields.Many2one('runbot_merge.repository', required=True)
+    repository = fields.Many2one('runbot_merge.repository', required=True, index=True)
     # store the PR number (not id) as we may want to send feedback to PR
     # objects on non-handled branches
-    pull_request = fields.Integer(group_operator=None)
+    pull_request = fields.Integer(group_operator=None, index=True)
     message = fields.Char()
     close = fields.Boolean()
     token_field = fields.Selection(
@@ -1363,12 +1717,13 @@ class Commit(models.Model):
         for c in self.search([('to_check', '=', True)]):
             try:
                 c.to_check = False
-                st = json.loads(c.statuses)
                 pr = PRs.search([('head', '=', c.sha)])
                 if pr:
-                    pr._validate(st)
+                    self.env.cr.precommit.data['change-message'] =\
+                        f"statuses changed on {c.sha}"
+                    pr._validate(c.statuses)
 
-                stagings = Stagings.search([('head_ids.sha', '=', c.sha)])
+                stagings = Stagings.search([('head_ids.sha', '=', c.sha), ('state', '=', 'pending')])
                 if stagings:
                     stagings._validate()
             except Exception:
@@ -1406,9 +1761,12 @@ class Stagings(models.Model):
 
     target = fields.Many2one('runbot_merge.branch', required=True, index=True)
 
-    batch_ids = fields.One2many(
-        'runbot_merge.batch', 'staging_id',
+    staging_batch_ids = fields.One2many('runbot_merge.staging.batch', 'runbot_merge_stagings_id')
+    batch_ids = fields.Many2many(
+        'runbot_merge.batch',
         context={'active_test': False},
+        compute="_compute_batch_ids",
+        search="_search_batch_ids",
     )
     pr_ids = fields.One2many('runbot_merge.pull_requests', compute='_compute_prs')
     state = fields.Selection([
@@ -1459,6 +1817,14 @@ class Stagings(models.Model):
             ))
             for staging in self
         ]
+
+    @api.depends('staging_batch_ids.runbot_merge_batch_id')
+    def _compute_batch_ids(self):
+        for staging in self:
+            staging.batch_ids = staging.staging_batch_ids.runbot_merge_batch_id
+
+    def _search_batch_ids(self, operator, value):
+        return [('staging_batch_ids.runbot_merge_batch_id', operator, value)]
 
     @api.depends('heads')
     def _compute_statuses(self):
@@ -1551,20 +1917,22 @@ class Stagings(models.Model):
     def cancel(self, reason, *args):
         self = self.filtered('active')
         if not self:
-            return
+            return False
 
         _logger.info("Cancelling staging %s: " + reason, self, *args)
-        self.mapped('batch_ids').write({'active': False})
         self.write({
             'active': False,
             'state': 'cancelled',
             'reason': reason % args,
         })
+        return True
 
     def fail(self, message, prs=None):
         _logger.info("Staging %s failed: %s", self, message)
+        self.env.cr.precommit.data['change-message'] =\
+            f'staging {self.id} failed: {message}'
         prs = prs or self.batch_ids.prs
-        prs.write({'state': 'error'})
+        prs.error = True
         for pr in prs:
            self.env.ref('runbot_merge.pr.staging.fail')._send(
                repository=pr.repository,
@@ -1572,12 +1940,12 @@ class Stagings(models.Model):
                format_args={'pr': pr, 'message': message},
            )
 
-        self.batch_ids.write({'active': False})
         self.write({
             'active': False,
             'state': 'failure',
             'reason': message,
         })
+        return True
 
     def try_splitting(self):
         batches = len(self.batch_ids)
@@ -1587,15 +1955,14 @@ class Stagings(models.Model):
             # NB: batches remain attached to their original staging
             sh = self.env['runbot_merge.split'].create({
                 'target': self.target.id,
-                'batch_ids': [(4, batch.id, 0) for batch in h],
+                'batch_ids': [Command.link(batch.id) for batch in h],
             })
             st = self.env['runbot_merge.split'].create({
                 'target': self.target.id,
-                'batch_ids': [(4, batch.id, 0) for batch in t],
+                'batch_ids': [Command.link(batch.id) for batch in t],
             })
             _logger.info("Split %s to %s (%s) and %s (%s)",
                          self, h, sh, t, st)
-            self.batch_ids.write({'active': False})
             self.write({
                 'active': False,
                 'state': 'failure',
@@ -1679,12 +2046,14 @@ class Stagings(models.Model):
                     'reason': str(e.__cause__ or e.__context__ or e)
                 })
             else:
+                self.env.cr.precommit.data['change-message'] =\
+                    f'staging {self.id} succeeded'
                 prs = self.mapped('batch_ids.prs')
                 logger.info(
                     "%s FF successful, marking %s as merged",
                     self, prs
                 )
-                prs.write({'state': 'merged'})
+                self.batch_ids.merge_date = fields.Datetime.now()
 
                 pseudobranch = None
                 if self.target == project.branch_ids[:1]:
@@ -1706,7 +2075,6 @@ class Stagings(models.Model):
                             'tags_add': json.dumps([pseudobranch]),
                         })
             finally:
-                self.batch_ids.write({'active': False})
                 self.write({'active': False})
         elif self.state == 'failure' or self.is_timed_out():
             self.try_splitting()
@@ -1800,34 +2168,6 @@ class Split(models.Model):
 
     target = fields.Many2one('runbot_merge.branch', required=True)
     batch_ids = fields.One2many('runbot_merge.batch', 'split_id', context={'active_test': False})
-
-class Batch(models.Model):
-    """ A batch is a "horizontal" grouping of *codependent* PRs: PRs with
-    the same label & target but for different repositories. These are
-    assumed to be part of the same "change" smeared over multiple
-    repositories e.g. change an API in repo1, this breaks use of that API
-    in repo2 which now needs to be updated.
-    """
-    _name = _description = 'runbot_merge.batch'
-
-    target = fields.Many2one('runbot_merge.branch', required=True, index=True)
-    staging_id = fields.Many2one('runbot_merge.stagings', index=True)
-    split_id = fields.Many2one('runbot_merge.split', index=True)
-
-    prs = fields.Many2many('runbot_merge.pull_requests')
-
-    active = fields.Boolean(default=True)
-
-    @api.constrains('target', 'prs')
-    def _check_prs(self):
-        for batch in self:
-            repos = self.env['runbot_merge.repository']
-            for pr in batch.prs:
-                if pr.target != batch.target:
-                    raise ValidationError("A batch and its PRs must have the same branch, got %s and %s" % (batch.target, pr.target))
-                if pr.repository in repos:
-                    raise ValidationError("All prs of a batch must have different target repositories, got a duplicate %s on %s" % (pr.repository, pr))
-                repos |= pr.repository
 
 
 class FetchJob(models.Model):

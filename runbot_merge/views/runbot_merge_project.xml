@@ -32,6 +32,8 @@
                             <field name="secret"/>
                         </group>
                         <group>
+                            <field name="staging_enabled" widget="boolean_toggle"/>
+                            <field name="staging_priority"/>
                             <field name="uniquifier"/>
                             <field name="ci_timeout"/>
                             <field name="batch_limit"/>

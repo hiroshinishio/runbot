@@ -11,7 +11,6 @@ from utils import seen, Commit, make_basic, to_pr
 ])
 def test_configure_fp_limit(env, config, make_repo, source, limit, count):
     prod, other = make_basic(env, config, make_repo)
-    bot_name = env['runbot_merge.project'].search([]).fp_github_name
     with prod:
         [c] = prod.make_commits(
             source, Commit('c', tree={'f': 'g'}),
@@ -20,7 +19,7 @@ def test_configure_fp_limit(env, config, make_repo, source, limit, count):
         pr = prod.make_pr(target=source, head='branch')
         prod.post_status(c, 'success', 'legal/cla')
         prod.post_status(c, 'success', 'ci/runbot')
-        pr.post_comment(f'hansen r+\n{bot_name} up to {limit}', config['role_reviewer']['token'])
+        pr.post_comment(f'hansen r+ up to {limit}', config['role_reviewer']['token'])
     env.run_crons()
     with prod:
         prod.post_status(f'staging.{source}', 'success', 'legal/cla')
@@ -38,14 +37,13 @@ def test_ignore(env, config, make_repo):
     to target
     """
     prod, other = make_basic(env, config, make_repo)
-    bot_name = env['runbot_merge.project'].search([]).fp_github_name
     branch_a = env['runbot_merge.branch'].search([('name', '=', 'a')])
     with prod:
         [c] = prod.make_commits('a', Commit('c', tree={'0': '0'}), ref='heads/mybranch')
         pr = prod.make_pr(target='a', head='mybranch')
         prod.post_status(c, 'success', 'legal/cla')
         prod.post_status(c, 'success', 'ci/runbot')
-        pr.post_comment('hansen r+\n%s ignore' % bot_name, config['role_reviewer']['token'])
+        pr.post_comment('hansen r+ ignore', config['role_reviewer']['token'])
     env.run_crons()
     pr_id = env['runbot_merge.pull_requests'].search([('number', '=', pr.number)])
     assert pr_id.limit_id == branch_a
@@ -67,13 +65,12 @@ def test_disable(env, config, make_repo, users):
     """
     prod, other = make_basic(env, config, make_repo)
     project = env['runbot_merge.project'].search([])
-    bot_name = project.fp_github_name
     with prod:
         [c] = prod.make_commits('a', Commit('c 0', tree={'0': '0'}), ref='heads/branch0')
         pr = prod.make_pr(target='a', head='branch0')
         prod.post_status(c, 'success', 'legal/cla')
         prod.post_status(c, 'success', 'ci/runbot')
-        pr.post_comment('hansen r+\n%s up to b' % bot_name, config['role_reviewer']['token'])
+        pr.post_comment('hansen r+ up to b', config['role_reviewer']['token'])
 
         [c] = prod.make_commits('a', Commit('c 1', tree={'1': '1'}), ref='heads/branch1')
         pr = prod.make_pr(target='a', head='branch1')
@@ -94,30 +91,28 @@ def test_disable(env, config, make_repo, users):
     assert p.parent_id == _1
     assert p.target.name == 'c'
 
-    project.fp_github_token = config['role_other']['token']
-    bot_name = project.fp_github_name
     with prod:
         [c] = prod.make_commits('a', Commit('c 2', tree={'2': '2'}), ref='heads/branch2')
         pr = prod.make_pr(target='a', head='branch2')
         prod.post_status(c, 'success', 'legal/cla')
         prod.post_status(c, 'success', 'ci/runbot')
-        pr.post_comment('hansen r+\n%s up to' % bot_name, config['role_reviewer']['token'])
-        pr.post_comment('%s up to b' % bot_name, config['role_reviewer']['token'])
-        pr.post_comment('%s up to foo' % bot_name, config['role_reviewer']['token'])
-        pr.post_comment('%s up to c' % bot_name, config['role_reviewer']['token'])
+        pr.post_comment('hansen r+ up to', config['role_reviewer']['token'])
+        pr.post_comment('hansen up to b', config['role_reviewer']['token'])
+        pr.post_comment('hansen up to foo', config['role_reviewer']['token'])
+        pr.post_comment('hansen up to c', config['role_reviewer']['token'])
     env.run_crons()
 
     # use a set because git webhooks delays might lead to mis-ordered
     # responses and we don't care that much
     assert set(pr.comments) == {
-        (users['reviewer'], "hansen r+\n%s up to" % bot_name),
-        (users['other'], "@%s please provide a branch to forward-port to." % users['reviewer']),
-        (users['reviewer'], "%s up to b" % bot_name),
-        (users['other'], "@%s branch 'b' is disabled, it can't be used as a forward port target." % users['reviewer']),
-        (users['reviewer'], "%s up to foo" % bot_name),
-        (users['other'], "@%s there is no branch 'foo', it can't be used as a forward port target." % users['reviewer']),
-        (users['reviewer'], "%s up to c" % bot_name),
-        (users['other'], "Forward-porting to 'c'."),
+        (users['reviewer'], "hansen r+ up to"),
+        (users['user'], "@{reviewer} please provide a branch to forward-port to.".format_map(users)),
+        (users['reviewer'], "hansen up to b"),
+        (users['user'], "@{reviewer} branch 'b' is disabled, it can't be used as a forward port target.".format_map(users)),
+        (users['reviewer'], "hansen up to foo"),
+        (users['user'], "@{reviewer} there is no branch 'foo', it can't be used as a forward port target.".format_map(users)),
+        (users['reviewer'], "hansen up to c"),
+        (users['user'], "Forward-porting to 'c'."),
         seen(env, pr, users),
     }
 
@@ -127,7 +122,6 @@ def test_limit_after_merge(env, config, make_repo, users):
     reviewer = config['role_reviewer']['token']
     branch_b = env['runbot_merge.branch'].search([('name', '=', 'b')])
     branch_c = env['runbot_merge.branch'].search([('name', '=', 'c')])
-    bot_name = env['runbot_merge.project'].search([]).fp_github_name
     with prod:
         [c] = prod.make_commits('a', Commit('c', tree={'0': '0'}), ref='heads/abranch')
         pr1 = prod.make_pr(target='a', head='abranch')
@@ -142,18 +136,18 @@ def test_limit_after_merge(env, config, make_repo, users):
     env.run_crons()
 
     p1, p2 = env['runbot_merge.pull_requests'].search([], order='number')
-    assert p1.limit_id == p2.limit_id == branch_c, "check that limit is correctly set"
+    assert p1.limit_id == p2.limit_id == env['runbot_merge.branch'].browse(())
     pr2 = prod.get_pr(p2.number)
     with prod:
-        pr1.post_comment(bot_name + ' up to b', reviewer)
-        pr2.post_comment(bot_name + ' up to b', reviewer)
+        pr1.post_comment('hansen up to b', reviewer)
+        pr2.post_comment('hansen up to b', reviewer)
     env.run_crons()
 
     assert p1.limit_id == p2.limit_id == branch_b
     assert pr1.comments == [
         (users['reviewer'], "hansen r+"),
         seen(env, pr1, users),
-        (users['reviewer'], f'{bot_name} up to b'),
+        (users['reviewer'], 'hansen up to b'),
         (users['user'], "Forward-porting to 'b'."),
         (users['user'], f"Forward-porting to 'b' (from {p2.display_name})."),
     ]
@@ -164,7 +158,7 @@ This PR targets b and is part of the forward-port chain. Further PRs will be cre
 
 More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
 """),
-        (users['reviewer'], f'{bot_name} up to b'),
+        (users['reviewer'], 'hansen up to b'),
         (users['user'], f"Forward-porting {p1.display_name} to 'b'."),
     ]
 
@@ -181,16 +175,12 @@ More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
     assert p2.source_id == p1
 
     with prod:
-        pr2.post_comment(f'{bot_name} up to c', reviewer)
+        pr2.post_comment('hansen up to c', reviewer)
     env.run_crons()
 
     assert pr2.comments[4:] == [
-        (users['user'], "@%s @%s this PR was modified / updated and has become a normal PR. "
-                   "It should be merged the normal way (via @%s)" % (
-            users['user'], users['reviewer'],
-            p2.repository.project_id.github_prefix
-        )),
-        (users['reviewer'], f'{bot_name} up to c'),
+        (users['user'], f"@{users['user']} @{users['reviewer']} this PR was modified / updated and has become a normal PR. It must be merged directly."),
+        (users['reviewer'], 'hansen up to c'),
         (users['user'], "Forward-porting to 'c'."),
     ]
     with prod:
@@ -207,7 +197,7 @@ More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
     assert p3
     pr3 = prod.get_pr(p3.number)
     with prod:
-        pr3.post_comment(f"{bot_name} up to c", reviewer)
+        pr3.post_comment("hansen up to c", reviewer)
     env.run_crons()
     assert pr3.comments == [
         seen(env, pr3, users),
@@ -215,11 +205,11 @@ More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
 @{users['user']} @{users['reviewer']} this PR targets c and is the last of the forward-port chain.
 
 To merge the full chain, use
-> @{p1.repository.project_id.fp_github_name} r+
+> @hansen r+
 
 More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
 """),
-        (users['reviewer'], f"{bot_name} up to c"),
+        (users['reviewer'], "hansen up to c"),
         (users['user'], f"Forward-porting {p2.display_name} to 'c'."),
     ]
     # 7 of previous check, plus r+
@@ -268,7 +258,7 @@ def test_post_merge(
     from_id = PRs.search(update_from(source.id))
     from_ = prod.get_pr(from_id.number)
     with prod:
-        from_.post_comment(f'{project.fp_github_name} up to {limit}', reviewer)
+        from_.post_comment(f'hansen up to {limit}', reviewer)
     env.run_crons()
 
     # there should always be a comment on the source and root indicating how
@@ -314,7 +304,7 @@ def test_resume_fw(env, post_merge, users, config, branches, mode):
     # fetch source PR
     [source] = PRs.search([('source_id', '=', False)])
     with prod:
-        prod.get_pr(source.number).post_comment(f'{project.fp_github_name} up to 5', reviewer)
+        prod.get_pr(source.number).post_comment('hansen up to 5', reviewer)
     # validate the forward ports for "child", "root", and "parent" so "current"
     # exists and we have one more target
     for branch in map(str, range(2, 5+1)):
@@ -336,12 +326,11 @@ def test_resume_fw(env, post_merge, users, config, branches, mode):
         numbers = range(5 if mode == 'mergetip' else 2, 5 + 1)
         with prod:
             for number in numbers:
-                prod.get_pr(number).post_comment(f'{project.github_prefix} r+', reviewer)
+                prod.get_pr(number).post_comment('hansen r+', reviewer)
         env.run_crons()
         with prod:
             for target in numbers:
                 pr = PRs.search([('target.name', '=', str(target))])
-                print(pr.display_name, pr.state, pr.staging_id)
                 prod.post_status(f'staging.{target}', 'success')
         env.run_crons()
         for number in numbers:
@@ -349,7 +338,7 @@ def test_resume_fw(env, post_merge, users, config, branches, mode):
 
     from_ = prod.get_pr(source.number)
     with prod:
-        from_.post_comment(f'{project.fp_github_name} up to 6', reviewer)
+        from_.post_comment('hansen up to 6', reviewer)
     env.run_crons()
 
     if mode == 'failbump':
@@ -378,6 +367,7 @@ def setci(*, source, repo, target, status='success'):
     in  ``repo``.
     """
     pr = source.search([('source_id', '=', source.id), ('target.name', '=', str(target))])
+    assert pr, f"could not find forward port of {source.display_name} to {target}"
     with repo:
         repo.post_status(pr.head, status)
 
@@ -419,7 +409,6 @@ def post_merge(env, config, users, make_repo, branches):
         'github_prefix': 'hansen',
         'fp_github_token': config['github']['token'],
         'fp_github_name': 'herbert',
-        'fp_github_email': 'hb@example.com',
         'branch_ids': [
             (0, 0, {'name': str(i), 'sequence': 1000 - (i * 10)})
             for i in branches
@@ -439,7 +428,6 @@ def post_merge(env, config, users, make_repo, branches):
         'review_rights': [(0, 0, {'repository_id': proj.repo_ids.id, 'review': True})]
     })
 
-    mbot = proj.github_prefix
     reviewer = config['role_reviewer']['token']
     # merge the source PR
     source_target = str(branches[0])
@@ -448,7 +436,7 @@ def post_merge(env, config, users, make_repo, branches):
         pr1 = prod.make_pr(target=source_target, head=c, title="a title")
 
         prod.post_status(c, 'success')
-        pr1.post_comment(f'{mbot} r+', reviewer)
+        pr1.post_comment('hansen r+', reviewer)
     env.run_crons()
     with prod:
         prod.post_status(f'staging.{source_target}', 'success')

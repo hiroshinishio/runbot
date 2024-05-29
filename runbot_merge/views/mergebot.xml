@@ -123,51 +123,138 @@
         <field name="model">runbot_merge.pull_requests</field>
         <field name="arch" type="xml">
             <form>
-                <header/>
+                <div class="o_form_statusbar">
+                    <span class="o_statusbar_buttons">
+                    <field name="github_url" widget="url" class="btn btn-secondary" text="Github"/>
+                    <field name="url" widget="url" class="btn btn-secondary" text="Frontend"/></span>
+                </div>
                 <sheet>
                     <div class="oe_title">
                         <h1>
                             <field name="repository"/>#<field name="number"/>
                         </h1>
+                        <h2>
+                          <field name="state"/>
+                          <span attrs="{'invisible': ['|', ('state', '=', 'merged'), ('blocked', '=', False)]}">
+                            (blocked: <field name="blocked"/>)
+                          </span>
+                            <span attrs="{'invisible': [('state', '!=', 'merged')]}">
+                                (<field name="merge_date"/>)
+                            </span>
+                        </h2>
                     </div>
-                    <group>
+                    <!-- main PR metadata -->
+                    <group name="metadata">
                         <group>
+                            <field name="batch_id"/>
                             <field name="target"/>
-                            <field name="state"/>
-                            <field name="author"/>
                         </group>
                         <group>
-                            <field name="label"/>
-                            <field name="priority"/>
-                            <field name="squash"/>
-                        </group>
-                    </group>
-                    <group>
-                        <group colspan="4">
+                            <field name="author"/>
                             <field name="head"/>
-                            <field name="statuses"/>
-                        </group>
-                        <group colspan="4">
-                            <field name="overrides"/>
                         </group>
                     </group>
-                    <group>
-                        <group colspan="4" string="Message">
+                    <notebook>
+                        <page name="state" string="State">
+                            <group>
+                                <group>
+                                    <field name="reviewed_by"/>
+                                    <field name="closed"/>
+                                    <field name="error"/>
+                                </group>
+                                <group>
+                                    <field name="status"/>
+                                    <details colspan="4">
+                                        <summary>Commit Statuses</summary>
+
+                                        <field name="statuses"/>
+                                    </details>
+                                    <details colspan="4">
+                                        <summary>Overrides</summary>
+                                        <field name="overrides"/>
+                                    </details>
+                                </group>
+                            </group>
+                            <group>
+                                <group colspan="4">
+                                    <field name="blocked"/>
+                                </group>
+                            </group>
+                        </page>
+                        <page name="configuration" string="Configuration">
+                            <group>
+                                <group>
+                                    <field name="merge_method"/>
+                                    <field name="squash"/>
+                                    <field name="draft"/>
+                                    <field name="limit_id"/>
+                                </group>
+                                <group>
+                                    <field name="priority"/>
+                                    <field name="skipchecks" widget="boolean_toggle"/>
+                                    <field name="cancel_staging" widget="boolean_toggle"/>
+                                </group>
+                            </group>
+                            <group string="Delegates">
+                                <group colspan="4">
+                                    <field name="delegates" nolabel="1">
+                                        <tree>
+                                            <button type="object" name="get_formview_action" icon="fa-external-link"/>
+                                            <field name="name"/>
+                                            <field name="github_login"/>
+                                        </tree>
+                                    </field>
+                                </group>
+                            </group>
+                        </page>
+                        <page name="stagings" string="Staging History">
+                            <group>
+                                <group colspan="4">
+                                    <field name="staging_ids" nolabel="1" readonly="1">
+                                        <tree>
+                                            <button type="object" name="get_formview_action" icon="fa-external-link"/>
+                                            <field name="staged_at"/>
+                                            <field name="state"/>
+                                            <field name="reason"/>
+                                        </tree>
+                                    </field>
+                                </group>
+                            </group>
+                        </page>
+                        <page name="porting" string="Forward-Porting">
+                            <group>
+                                <group>
+                                    <field string="Original PR" name="source_id"/>
+                                    <field name="parent_id"/>
+                                    <field
+                                        attrs="{'invisible': [('parent_id', '=', False), ('source_id', '!=', False)]}"
+                                        string="Detached because" name="detach_reason" readonly="1"/>
+                                </group>
+                            </group>
+                            <group>
+                              <group colspan="4">
+                                <field name="forwardport_ids" nolabel="1" readonly="True">
+                                  <tree>
+                                    <button type="object" name="get_formview_action" icon="fa-external-link"/>
+                                    <field name="target" string="Branch"/>
+                                    <field name="number"/>
+                                  </tree>
+                                </field>
+                              </group>
+                            </group>
+                        </page>
+                    </notebook>
+                    <!-- influencers -->
+                    <group string="Message">
+                        <group colspan="4">
                             <field name="message" nolabel="1"/>
                         </group>
                     </group>
-                    <group>
-                        <group colspan="4" string="Delegates">
-                            <field name="delegates" nolabel="1">
-                                <tree>
-                                    <button type="object" name="get_formview_action" icon="fa-external-link"/>
-                                    <field name="name"/>
-                                    <field name="github_login"/>
-                                </tree>
-                            </field>
-                        </group>
-                    </group>
                 </sheet>
+                <div class="oe_chatter">
+                    <field name="message_follower_ids" widget="mail_followers"/>
+                    <field name="message_ids" widget="mail_thread"/>
+                </div>
             </form>
         </field>
     </record>
@@ -244,6 +331,15 @@
                             </field>
                         </group>
                     </group>
+                    <group string="Batches">
+                        <field name="batch_ids" colspan="4" nolabel="1" readonly="1">
+                            <tree>
+                                <button type="object" name="get_formview_action" icon="fa-external-link"/>
+                                <field name="name"/>
+                                <field name="prs" widget="many2many_tags"/>
+                            </tree>
+                        </field>
+                    </group>
                     <group string="PRs">
                         <field name="pr_ids" colspan="4" nolabel="1" readonly="1">
                             <tree>
@@ -251,14 +347,6 @@
                                 <field name="display_name"/>
                                 <field name="github_url" widget="url"/>
                                 <field name="url" widget="url"/>
-                            </tree>
-                        </field>
-                    </group>
-                    <group string="Batches">
-                        <field name="batch_ids" colspan="4" nolabel="1" readonly="1">
-                            <tree>
-                                <button type="object" name="get_formview_action" icon="fa-external-link"/>
-                                <field name="prs" widget="many2many_tags"/>
                             </tree>
                         </field>
                     </group>

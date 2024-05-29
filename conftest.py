@@ -1175,6 +1175,9 @@ class Model:
     def __len__(self):
         return len(self._ids)
 
+    def __hash__(self):
+        return hash((self._model, frozenset(self._ids)))
+
     def __eq__(self, other):
         if not isinstance(other, Model):
             return NotImplemented

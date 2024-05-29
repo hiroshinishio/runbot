@@ -1,7 +1,7 @@
 {
     'name': 'merge bot',
-    'version': '1.9',
-    'depends': ['contacts', 'website'],
+    'version': '1.12',
+    'depends': ['contacts', 'mail', 'website'],
     'data': [
         'security/security.xml',
         'security/ir.model.access.csv',
@@ -12,6 +12,7 @@
         'data/runbot_merge.pull_requests.feedback.template.csv',
         'views/res_partner.xml',
         'views/runbot_merge_project.xml',
+        'views/batch.xml',
         'views/mergebot.xml',
         'views/queues.xml',
         'views/configuration.xml',

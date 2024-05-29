@@ -176,7 +176,7 @@ def handle_pr(env, event):
         return env['runbot_merge.pull_requests'].search([
             ('repository', '=', repo.id),
             ('number', '=', pr['number']),
-            ('target', '=', target.id),
+            # ('target', '=', target.id),
         ])
     # edition difficulty: pr['base']['ref] is the *new* target, the old one
     # is at event['change']['base']['ref'] (if the target changed), so edition
@@ -288,7 +288,8 @@ def handle_pr(env, event):
         )
 
         pr_obj.write({
-            'state': 'opened',
+            'reviewed_by': False,
+            'error': False,
             'head': pr['head']['sha'],
             'squash': pr['commits'] == 1,
         })
@@ -327,11 +328,10 @@ def handle_pr(env, event):
                 close=True,
                 message=env.ref('runbot_merge.handle.pr.merged')._format(event=event),
             )
-
-        if pr_obj.state == 'closed':
+        elif pr_obj.closed:
             _logger.info('%s reopening %s', event['sender']['login'], pr_obj.display_name)
             pr_obj.write({
-                'state': 'opened',
+                'closed': False,
                 # updating the head triggers a revalidation
                 'head': pr['head']['sha'],
                 'squash': pr['commits'] == 1,

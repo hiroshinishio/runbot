@@ -218,7 +218,8 @@ class FreezeWizard(models.Model):
         }
         for repo, copy in repos.items():
             copy.fetch(git.source_url(repo, 'github'), '+refs/heads/*:refs/heads/*')
-        for pr in self.release_pr_ids.pr_id | self.bump_pr_ids.pr_id:
+        all_prs = self.release_pr_ids.pr_id | self.bump_pr_ids.pr_id
+        for pr in all_prs:
             repos[pr.repository].fetch(
                 git.source_url(pr.repository, 'github'),
                 pr.head,
@@ -265,6 +266,11 @@ class FreezeWizard(models.Model):
             _logger.debug("rebasing %s on %s (commits=%s)",
                           bump.pr_id.display_name, prev, len(commits))
             bump_heads[repo_id] = repos[repo_id].rebase(prev, commits)[0]
+
+        # prevent concurrent updates to the commits table so we control the
+        # creation of commit objects from rebasing the release & bump PRs, do it
+        # only just before *pushing*
+        self.env.cr.execute("LOCK runbot_merge_commit IN ACCESS EXCLUSIVE MODE NOWAIT")
 
         deployed = {}
         # at this point we've got a bunch of tmp branches with merged release
@@ -338,8 +344,82 @@ class FreezeWizard(models.Model):
                 f"Unable to {reason} branch {repo}:{branch}.{addendum}"
             )
 
-        all_prs = self.release_pr_ids.pr_id | self.bump_pr_ids.pr_id
-        all_prs.state = 'merged'
+        b = self.env['runbot_merge.branch'].search([('name', '=', self.branch_name)])
+        self.env.cr.execute(
+            "UPDATE runbot_merge_batch SET target=%s WHERE id = %s;"
+            "UPDATE runbot_merge_pull_requests SET target=%s WHERE id = any(%s)",
+            [
+                b.id, self.release_pr_ids.pr_id.batch_id.id,
+                b.id, self.release_pr_ids.pr_id.ids,
+            ]
+        )
+        all_prs.batch_id.merge_date = fields.Datetime.now()
+        all_prs.reviewed_by = self.env.user.partner_id.id
+        for p in all_prs:
+            p.commits_map = json.dumps({
+                '': deployed[p.id],
+                p.head: deployed[p.id]
+            })
+
+        # stagings have to be created conditionally as otherwise we might not
+        # have a `target` to set and it's mandatory
+        laster = self.env['runbot_merge.stagings'].search(
+            [('target', '=', master.id), ('state', '=', 'success')],
+            order='id desc',
+            limit=1,
+        ).commits.mapped(lambda c: (c.repository_id, c.commit_id))
+        if self.release_pr_ids:
+            rel_items = [(0, 0, {
+                    'repository_id': repo.id,
+                    'commit_id': self.env['runbot_merge.commit'].create({
+                        'sha': sha,
+                        'to_check': False,
+                    }).id,
+                } if (sha := rel_heads.get(repo)) else {
+                    'repository_id': repo.id,
+                    'commit_id': commit.id,
+                })
+                for repo, commit in laster
+            ]
+            self.env['runbot_merge.stagings'].create([{
+                'state': 'success',
+                'reason': 'release freeze staging',
+                'active': False,
+                'target': b.id,
+                'staging_batch_ids': [
+                    (0, 0, {'runbot_merge_batch_id': batch.id})
+                    for batch in self.release_pr_ids.pr_id.batch_id
+                ],
+                'heads': rel_items,
+                'commits': rel_items,
+            }])
+
+        if self.bump_pr_ids:
+            bump_items = [(0, 0, {
+                    'repository_id': repo.id,
+                    'commit_id': self.env['runbot_merge.commit'].create({
+                        'sha': sha,
+                        'to_check': False,
+                    }).id,
+                } if (sha := bump_heads.get(repo)) else {
+                    'repository_id': repo.id,
+                    'commit_id': commit.id,
+                })
+                for repo, commit in laster
+            ]
+            self.env['runbot_merge.stagings'].create([{
+                'state': 'success',
+                'reason': 'bump freeze staging',
+                'active': False,
+                'target': master.id,
+                'staging_batch_ids': [
+                    (0, 0, {'runbot_merge_batch_id': batch.id})
+                    for batch in self.bump_pr_ids.pr_id.batch_id
+                ],
+                'heads': bump_items,
+                'commits': bump_items,
+            }])
+
         self.env['runbot_merge.pull_requests.feedback'].create([{
             'repository': pr.repository.id,
             'pull_request': pr.number,
