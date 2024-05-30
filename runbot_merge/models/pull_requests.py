@@ -1796,6 +1796,8 @@ class Stagings(models.Model):
     active = fields.Boolean(default=True)
 
     staged_at = fields.Datetime(default=fields.Datetime.now, index=True)
+    staging_end = fields.Datetime()
+    staging_duration = fields.Float(compute='_compute_duration')
     timeout_limit = fields.Datetime(store=True, compute='_compute_timeout_limit')
     reason = fields.Text("Reason for final state (if any)")
 
@@ -1819,10 +1821,16 @@ class Stagings(models.Model):
         for staging in previously_pending:
             if staging.state != 'pending':
                 super(Stagings, staging).write({
-                    'statuses_cache': json.dumps(staging.statuses)
+                    'staging_end': fields.Datetime.now(),
+                    'statuses_cache': json.dumps(staging.statuses),
                 })
 
         return True
+
+    @api.depends('staged_at', 'staging_end')
+    def _compute_duration(self):
+        for s in self:
+            s.staging_duration = ((s.staging_end or fields.Datetime.now()) - s.staged_at).total_seconds()
 
     def name_get(self):
         return [

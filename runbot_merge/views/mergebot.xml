@@ -311,6 +311,8 @@
                         </group>
                         <group>
                             <field name="staged_at"/>
+                            <field string="Staging Duration (seconds)"
+                                    name="staging_duration" widget="integer"/>
                         </group>
                     </group>
                     <group>
