@@ -182,7 +182,10 @@ def to_pr(env, pr):
 def part_of(label, pr_id, *, separator='\n\n'):
     """ Adds the "part-of" pseudo-header in the footer.
     """
-    return f'{label}{separator}Part-of: {pr_id.display_name}'
+    return f"""\
+{label}{separator}\
+Part-of: {pr_id.display_name}
+Signed-off-by: {pr_id.reviewed_by.formatted_email}"""
 
 def ensure_one(records):
     assert len(records) == 1

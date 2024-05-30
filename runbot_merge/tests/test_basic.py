@@ -1965,7 +1965,8 @@ Some: thing
 
 is odd
 
-Part-of: {pr_id.display_name}"""
+Part-of: {pr_id.display_name}
+Signed-off-by: {reviewer}"""
 
     def test_pr_mergehead(self, repo, env, config):
         """ if the head of the PR is a merge commit and one of the parents is

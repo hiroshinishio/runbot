@@ -1339,19 +1339,36 @@ class PullRequests(models.Model):
             if commit:
                 self.env.cr.commit()
 
-    def _build_merge_message(self, message: Union['PullRequests', str], related_prs=()) -> 'Message':
+    def _build_message(self, message: Union['PullRequests', str], related_prs: 'PullRequests' = (), merge: bool = True) -> 'Message':
         # handle co-authored commits (https://help.github.com/articles/creating-a-commit-with-multiple-authors/)
         m = Message.from_message(message)
         if not is_mentioned(message, self):
-            m.body += f'\n\ncloses {self.display_name}'
+            if merge:
+                m.body += f'\n\ncloses {self.display_name}'
+            else:
+                m.headers.pop('Part-Of', None)
+                m.headers.add('Part-Of', self.display_name)
 
         for r in related_prs:
             if not is_mentioned(message, r, full_reference=True):
                 m.headers.add('Related', r.display_name)
 
-        if self.reviewed_by:
-            m.headers.add('signed-off-by', self.reviewed_by.formatted_email)
+        # ensures all reviewers in the review path are on the PR in order:
+        # original reviewer, then last conflict reviewer, then current PR
+        reviewers = (self | self.root_id | self.source_id)\
+            .mapped('reviewed_by.formatted_email')
 
+        sobs = m.headers.getlist('signed-off-by')
+        m.headers.remove('signed-off-by')
+        m.headers.extend(
+            ('signed-off-by', signer)
+            for signer in sobs
+            if signer not in reviewers
+        )
+        m.headers.extend(
+            ('signed-off-by', reviewer)
+            for reviewer in reversed(reviewers)
+        )
         return m
 
     def unstage(self, reason, *args):

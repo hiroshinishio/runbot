@@ -454,7 +454,7 @@ def stage(pr: PullRequests, info: StagingSlice, related_prs: PullRequests) -> Tu
     return method, new_head
 
 def stage_squash(pr: PullRequests, info: StagingSlice, commits: List[github.PrCommit], related_prs: PullRequests) -> str:
-    msg = pr._build_merge_message(pr, related_prs=related_prs)
+    msg = pr._build_message(pr, related_prs=related_prs)
 
     authors = {
         (c['commit']['author']['name'], c['commit']['author']['email'])
@@ -499,11 +499,7 @@ def stage_squash(pr: PullRequests, info: StagingSlice, commits: List[github.PrCo
     return head
 
 def stage_rebase_ff(pr: PullRequests, info: StagingSlice, commits: List[github.PrCommit], related_prs: PullRequests) -> str:
-    # updates head commit with PR number (if necessary) then rebases
-    # on top of target
-    msg = pr._build_merge_message(commits[-1]['commit']['message'], related_prs=related_prs)
-    commits[-1]['commit']['message'] = str(msg)
-    add_self_references(pr, commits[:-1])
+    add_self_references(pr, commits, related_prs=related_prs, merge=commits[-1])
 
     _logger.debug("rebasing %s on %s (commits=%s)",
                   pr.display_name, info.head, len(commits))
@@ -512,11 +508,11 @@ def stage_rebase_ff(pr: PullRequests, info: StagingSlice, commits: List[github.P
     return head
 
 def stage_rebase_merge(pr: PullRequests, info: StagingSlice, commits: List[github.PrCommit], related_prs: PullRequests) -> str :
-    add_self_references(pr, commits)
+    add_self_references(pr, commits, related_prs=related_prs)
     _logger.debug("rebasing %s on %s (commits=%s)",
                   pr.display_name, info.head, len(commits))
     h, mapping = info.repo.rebase(info.head, commits=commits)
-    msg = pr._build_merge_message(pr, related_prs=related_prs)
+    msg = pr._build_message(pr, related_prs=related_prs)
 
     project = pr.repository.project_id
     merge_head= info.repo.merge(
@@ -554,7 +550,7 @@ def stage_merge(pr: PullRequests, info: StagingSlice, commits: List[github.PrCom
             raise exceptions.MergeError(pr, t.stderr)
         merge_tree = t.stdout.strip()
         new_parents = [info.head] + list(head_parents - {base_commit})
-        msg = pr._build_merge_message(pr_head['commit']['message'], related_prs=related_prs)
+        msg = pr._build_message(pr_head['commit']['message'], related_prs=related_prs)
 
         d2t = itemgetter('name', 'email', 'date')
         c = info.repo.commit_tree(
@@ -574,7 +570,7 @@ def stage_merge(pr: PullRequests, info: StagingSlice, commits: List[github.PrCom
         return copy
     else:
         # otherwise do a regular merge
-        msg = pr._build_merge_message(pr)
+        msg = pr._build_message(pr)
         project = pr.repository.project_id
         merge_head = info.repo.merge(
             info.head, pr.head, str(msg),
@@ -595,17 +591,21 @@ def is_mentioned(message: Union[PullRequests, str], pr: PullRequests, *, full_re
         pattern = fr'( |\b{repository})#{pr.number}\b'
     return bool(re.search(pattern, message if isinstance(message, str) else message.message))
 
-def add_self_references(pr: PullRequests, commits: List[github.PrCommit]):
+def add_self_references(
+        pr: PullRequests,
+        commits: List[github.PrCommit],
+        related_prs: PullRequests,
+        merge: Optional[github.PrCommit] = None,
+):
     """Adds a footer reference to ``self`` to all ``commits`` if they don't
     already refer to the PR.
     """
     for c in (c['commit'] for c in commits):
-        if not is_mentioned(c['message'], pr):
-            message = c['message']
-            m = Message.from_message(message)
-            m.headers.pop('Part-Of', None)
-            m.headers.add('Part-Of', pr.display_name)
-            c['message'] = str(m)
+        c['message'] = str(pr._build_message(
+            c['message'],
+            related_prs=related_prs,
+            merge=merge and c['url'] == merge['commit']['url'],
+        ))
 
 BREAK = re.compile(r'''
     [ ]{0,3} # 0-3 spaces of indentation
