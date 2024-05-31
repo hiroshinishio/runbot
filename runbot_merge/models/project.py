@@ -32,6 +32,7 @@ class Project(models.Model):
         ('largest', "Largest of split and ready PRs"),
         ('ready', "Ready PRs over split"),
     ], default="default", required=True)
+    staging_statuses = fields.Boolean(default=True)
 
     ci_timeout = fields.Integer(
         default=60, required=True, group_operator=None,
