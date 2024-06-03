@@ -24,6 +24,41 @@ def repo(env, project, make_repo, users, setreviewers):
     setreviewers(*project.repo_ids)
     return r
 
+@pytest.fixture(autouse=True, params=["statuses", "rpc"])
+def stagings(request, env, project, repo):
+    """Hook in support for validating stagings via RPC calls instead of CI
+    webhooks. Transparent for the tests as long as they send statuses to
+    symbolic refs (branch names) rather than commits, although commits *would*
+    probably be doable (look up the head for the commit, then what staging it's
+    part of)
+    """
+    if request.param == "statuses":
+            yield
+    else:
+        env['res.users'].browse([env._uid]).write({
+            "groups_id": [(4, env.ref("runbot_merge.status").id, {})]
+        })
+        project.write({
+            "staging_rpc": True,
+            "staging_statuses": False,
+        })
+        RepoType = type(repo)
+        # apparently side_effect + wraps on unbound method don't work correctly,
+        # the wrapped method does get called when returning DEFAULT but *the
+        # instance (subject) is not sent along for the ride* so the call fails.
+        post_status = RepoType.post_status
+        def _post_status(repo, ref, status, context='default', **kw):
+            if not ref.startswith(('staging.', 'heads/staging.')):
+                return post_status(repo, ref, status, context, **kw)
+
+            c = repo.commit(ref)
+            branchname = ref.removeprefix('staging.').removeprefix('heads/staging.')
+            env['runbot_merge.stagings'].search([('target.name', '=', branchname)])\
+                .post_status(c.id, context, status, **kw)
+
+        with mock.patch.object(RepoType, "post_status", _post_status):
+            yield
+
 def test_trivial_flow(env, repo, page, users, config):
     # create base branch
     with repo:
@@ -81,12 +116,10 @@ def test_trivial_flow(env, repo, page, users, config):
     assert pr_page(page, pr).cssselect('.alert-primary')
 
     with repo:
-        # get head of staging branch
-        staging_head = repo.commit('heads/staging.master')
-        repo.post_status(staging_head.id, 'success', 'ci/runbot', target_url='http://foo.com/pog')
-        repo.post_status(staging_head.id, 'success', 'legal/cla')
+        repo.post_status('staging.master', 'success', 'ci/runbot', target_url='http://foo.com/pog')
+        repo.post_status('staging.master', 'success', 'legal/cla')
         # the should not block the merge because it's not part of the requirements
-        repo.post_status(staging_head.id, 'failure', 'ci/lint', target_url='http://ignored.com/whocares')
+        repo.post_status('staging.master', 'failure', 'ci/lint', target_url='http://ignored.com/whocares')
     # need to store this because after the crons have run the staging will
     # have succeeded and been disabled
     st = pr_id.staging_id
@@ -404,18 +437,16 @@ def test_staging_ongoing(env, repo, config):
     ])
     assert p_2.state == 'ready', "PR2 should not have been staged since there is a pending staging for master"
 
-    staging_head = repo.commit('heads/staging.master')
     with repo:
-        repo.post_status(staging_head.id, 'success', 'ci/runbot')
-        repo.post_status(staging_head.id, 'success', 'legal/cla')
+        repo.post_status('staging.master', 'success', 'ci/runbot')
+        repo.post_status('staging.master', 'success', 'legal/cla')
     env.run_crons()
     assert pr1.state == 'merged'
     assert p_2.staging_id
 
-    staging_head = repo.commit('heads/staging.master')
     with repo:
-        repo.post_status(staging_head.id, 'success', 'ci/runbot')
-        repo.post_status(staging_head.id, 'success', 'legal/cla')
+        repo.post_status('staging.master', 'success', 'ci/runbot')
+        repo.post_status('staging.master', 'success', 'legal/cla')
     env.run_crons()
     assert p_2.state == 'merged'
 
@@ -570,7 +601,7 @@ def test_timeout_bump_on_pending(env, repo, config):
     old_timeout = odoo.fields.Datetime.to_string(datetime.datetime.now() - datetime.timedelta(days=15))
     st.timeout_limit = old_timeout
     with repo:
-        repo.post_status(repo.commit('heads/staging.master').id, 'pending', 'ci/runbot')
+        repo.post_status('staging.master', 'pending', 'ci/runbot')
     env.run_crons('runbot_merge.process_updated_commits')
     assert st.timeout_limit > old_timeout
 
@@ -591,11 +622,10 @@ def test_staging_ci_failure_single(env, repo, users, config, page):
     pr_id = to_pr(env, pr)
     assert pr_id.staging_id
 
-    staging_head = repo.commit('heads/staging.master')
     with repo:
-        repo.post_status(staging_head.id, 'failure', 'a/b')
-        repo.post_status(staging_head.id, 'success', 'legal/cla')
-        repo.post_status(staging_head.id, 'failure', 'ci/runbot') # stable genius
+        repo.post_status('staging.master', 'failure', 'a/b')
+        repo.post_status('staging.master', 'success', 'legal/cla')
+        repo.post_status('staging.master', 'failure', 'ci/runbot') # stable genius
     env.run_crons()
     assert pr_id.state == 'error'
 
@@ -636,8 +666,8 @@ def test_ff_failure(env, repo, config, page):
     # report staging success & run cron to merge
     staging = repo.commit('heads/staging.master')
     with repo:
-        repo.post_status(staging.id, 'success', 'legal/cla')
-        repo.post_status(staging.id, 'success', 'ci/runbot')
+        repo.post_status('staging.master', 'success', 'legal/cla')
+        repo.post_status('staging.master', 'success', 'ci/runbot')
     env.run_crons()
 
     assert st.reason == 'update is not a fast forward'
@@ -933,8 +963,8 @@ def test_forward_port(env, repo, config):
     st = repo.commit('staging.master')
 
     with repo:
-        repo.post_status(st.id, 'success', 'legal/cla')
-        repo.post_status(st.id, 'success', 'ci/runbot')
+        repo.post_status('staging.master', 'success', 'legal/cla')
+        repo.post_status('staging.master', 'success', 'ci/runbot')
     env.run_crons()
 
     h = repo.commit('master')
@@ -1158,8 +1188,8 @@ class TestRetry:
         ]).staging_id
 
         staging_head = repo.commit('heads/staging.master')
-        repo.post_status(staging_head.id, 'success', 'legal/cla')
-        repo.post_status(staging_head.id, 'failure', 'ci/runbot')
+        repo.post_status('staging.master', 'success', 'legal/cla')
+        repo.post_status('staging.master', 'failure', 'ci/runbot')
         env.run_crons()
         pr = env['runbot_merge.pull_requests'].search([
             ('repository.name', '=', repo.name),
@@ -1178,8 +1208,8 @@ class TestRetry:
 
         staging_head2 = repo.commit('heads/staging.master')
         assert staging_head2 != staging_head
-        repo.post_status(staging_head2.id, 'success', 'legal/cla')
-        repo.post_status(staging_head2.id, 'success', 'ci/runbot')
+        repo.post_status('staging.master', 'success', 'legal/cla')
+        repo.post_status('staging.master', 'success', 'ci/runbot')
         env.run_crons()
         assert pr.state == 'merged'
 
@@ -1202,8 +1232,8 @@ class TestRetry:
 
         staging_head = repo.commit('heads/staging.master')
         with repo:
-            repo.post_status(staging_head.id, 'success', 'legal/cla')
-            repo.post_status(staging_head.id, 'failure', 'ci/runbot')
+            repo.post_status('staging.master', 'success', 'legal/cla')
+            repo.post_status('staging.master', 'failure', 'ci/runbot')
         env.run_crons()
         assert env['runbot_merge.pull_requests'].search([
             ('repository.name', '=', repo.name),
@@ -1221,8 +1251,8 @@ class TestRetry:
         staging_head2 = repo.commit('heads/staging.master')
         assert staging_head2 != staging_head
         with repo:
-            repo.post_status(staging_head2.id, 'success', 'legal/cla')
-            repo.post_status(staging_head2.id, 'success', 'ci/runbot')
+            repo.post_status('staging.master', 'success', 'legal/cla')
+            repo.post_status('staging.master', 'success', 'ci/runbot')
         env.run_crons()
         assert env['runbot_merge.pull_requests'].search([
             ('repository.name', '=', repo.name),
@@ -1297,8 +1327,8 @@ class TestRetry:
 
         staging_head = repo.commit('heads/staging.master')
         with repo:
-            repo.post_status(staging_head.id, 'success', 'legal/cla')
-            repo.post_status(staging_head.id, 'failure', 'ci/runbot')
+            repo.post_status('staging.master', 'success', 'legal/cla')
+            repo.post_status('staging.master', 'failure', 'ci/runbot')
         env.run_crons()
         pr = env['runbot_merge.pull_requests'].search([
             ('repository.name', '=', repo.name),
@@ -1357,8 +1387,8 @@ class TestMergeMethod:
             "dummy commit aside, the previous master's tip should be the sole parent of the staging commit"
 
         with repo:
-            repo.post_status(staging.id, 'success', 'legal/cla')
-            repo.post_status(staging.id, 'success', 'ci/runbot')
+            repo.post_status('staging.master', 'success', 'legal/cla')
+            repo.post_status('staging.master', 'success', 'ci/runbot')
         env.run_crons()
         pr = env['runbot_merge.pull_requests'].search([
             ('repository.name', '=', repo.name),
@@ -2367,10 +2397,9 @@ class TestPRUpdate(object):
         assert pr.state == 'ready'
         assert pr.staging_id
 
-        h = repo.commit('heads/staging.master').id
         with repo:
-            repo.post_status(h, 'success', 'legal/cla')
-            repo.post_status(h, 'failure', 'ci/runbot')
+            repo.post_status('staging.master', 'success', 'legal/cla')
+            repo.post_status('staging.master', 'failure', 'ci/runbot')
         env.run_crons()
         assert not pr.staging_id
         assert pr.state == 'error'
@@ -3052,19 +3081,17 @@ class TestBatching(object):
         assert len(sp) == 1
 
         # This is the failing PR!
-        h = repo.commit('heads/staging.master').id
         with repo:
-            repo.post_status(h, 'failure', 'ci/runbot')
-            repo.post_status(h, 'success', 'legal/cla')
+            repo.post_status('staging.master', 'failure', 'ci/runbot')
+            repo.post_status('staging.master', 'success', 'legal/cla')
         env.run_crons()
         assert pr1.state == 'error'
 
         assert pr2.staging_id
 
-        h = repo.commit('heads/staging.master').id
         with repo:
-            repo.post_status(h, 'success', 'ci/runbot')
-            repo.post_status(h, 'success', 'legal/cla')
+            repo.post_status('staging.master', 'success', 'ci/runbot')
+            repo.post_status('staging.master', 'success', 'legal/cla')
         env.run_crons('runbot_merge.process_updated_commits', 'runbot_merge.merge_cron', 'runbot_merge.staging_cron')
         assert pr2.state == 'merged'
 

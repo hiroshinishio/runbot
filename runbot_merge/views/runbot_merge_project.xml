@@ -30,6 +30,16 @@
                             <field name="github_email" readonly="0"
                                    help="Identity when creating new commits, defaults to public email, falls back to primary email."/>
                             <field name="secret"/>
+                            <span attrs="{'invisible': [
+                                '|',
+                                    ('staging_statuses', '=', False),
+                                    ('staging_rpc', '=', False),
+                            ]}" class="alert alert-warning" role="alert">
+                                Avoid overlaps between GH and RPC as the older
+                                GH statuses may overwrite more recent RPC statuses.
+                            </span>
+                            <field name="staging_statuses" string="Validate via GH statuses"/>
+                            <field name="staging_rpc" string="Validate via direct RPC"/>
                         </group>
                         <group>
                             <field name="staging_enabled" widget="boolean_toggle"/>

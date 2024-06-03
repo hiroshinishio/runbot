@@ -18,6 +18,7 @@ import sentry_sdk
 import werkzeug
 
 from odoo import api, fields, models, tools, Command
+from odoo.exceptions import AccessError
 from odoo.osv import expression
 from odoo.tools import html_escape, Reverse
 from . import commands
@@ -1813,14 +1814,6 @@ class Stagings(models.Model):
     statuses = fields.Binary(compute='_compute_statuses')
     statuses_cache = fields.Text(default='{}', required=True)
 
-    def write(self, vals):
-        # don't allow updating the statuses_cache
-        vals.pop('statuses_cache', None)
-
-        super().write(vals)
-
-        return True
-
     @api.depends('staged_at', 'staging_end')
     def _compute_duration(self):
         for s in self:
@@ -1895,6 +1888,27 @@ class Stagings(models.Model):
         WHERE id = any(%(ids)s)
         """, {'sha': c.sha, 'statuses': c.statuses, 'ids': self.ids})
         self.modified(['statuses_cache'])
+
+    def post_status(self, sha, context, status, *, target_url=None, description=None):
+        if not self.env.user.has_group('runbot_merge.status'):
+            raise AccessError("You are not allowed to post a status.")
+
+        for s in self:
+            if not s.target.project_id.staging_rpc:
+                continue
+
+            if not any(c.commit_id.sha == sha for c in s.commits):
+                raise ValueError(f"Staging {s.id} does not have the commit {sha}")
+
+            st = json.loads(s.statuses_cache)
+            st.setdefault(sha, {})[context] = {
+                'state': status,
+                'target_url': target_url,
+                'description': description,
+            }
+            s.statuses_cache = json.dumps(st)
+
+        return True
 
     @api.depends(
         "statuses_cache",
@@ -2006,17 +2020,18 @@ class Stagings(models.Model):
             })
             return True
 
-        # single batch => the staging is an unredeemable failure
+        # single batch => the staging is an irredeemable failure
         if self.state != 'failure':
             # timed out, just mark all PRs (wheee)
             self.fail('timed out (>{} minutes)'.format(self.target.project_id.ci_timeout))
             return False
 
+        staging_statuses = json.loads(self.statuses_cache)
         # try inferring which PR failed and only mark that one
         for head in self.heads:
             required_statuses = set(head.repository_id.status_ids._for_staging(self).mapped('context'))
 
-            statuses = json.loads(head.commit_id.statuses or '{}')
+            statuses = staging_statuses.get(head.commit_id.sha, {})
             reason = next((
                 ctx for ctx, result in statuses.items()
                 if ctx in required_statuses

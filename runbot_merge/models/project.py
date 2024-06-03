@@ -33,6 +33,7 @@ class Project(models.Model):
         ('ready', "Ready PRs over split"),
     ], default="default", required=True)
     staging_statuses = fields.Boolean(default=True)
+    staging_rpc = fields.Boolean(default=False)
 
     ci_timeout = fields.Integer(
         default=60, required=True, group_operator=None,
