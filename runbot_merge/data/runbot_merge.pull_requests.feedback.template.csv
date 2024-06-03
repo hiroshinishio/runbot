@@ -131,10 +131,10 @@ runbot_merge.forwardport.failure.conflict,"{pr.ping}the next pull request ({new.
 pr: the pr which was just forward ported
 new: the new forward-port
 footer: some footer text"
-runbot_merge.forwardport.reminder,{pr.ping}this pull request has forward-port PRs awaiting action (not merged or closed):{outstanding},"Comment when a forward port has outstanding (not merged or closed) descendants
+runbot_merge.forwardport.reminder,{pr.ping}this forward port of {source.display_name} is awaiting action (not merged or closed).,"Comment when a forward port has outstanding (not merged or closed) descendants
 
-pr: the original (source) PR
-outstanding: markdown-formatted list of outstanding PRs"
+pr: the forward-port
+source: the source PR"
 runbot_merge.forwardport.failure,"{pr.ping}cherrypicking of pull request {pr.source_id.display_name} failed.
 {commits}{stdout}{stderr}
 Either perform the forward-port manually (and push to this branch, proceeding as usual) or close this PR (maybe?).

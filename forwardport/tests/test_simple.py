@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from utils import seen, Commit, make_basic, REF_PATTERN, MESSAGE_TEMPLATE, validate_all, part_of, to_pr
+from utils import seen, Commit, make_basic, REF_PATTERN, MESSAGE_TEMPLATE, validate_all, part_of, to_pr, re_matches
 
 FMT = '%Y-%m-%d %H:%M:%S'
 FAKE_PREV_WEEK = (datetime.now() + timedelta(days=1)).strftime(FMT)
@@ -132,10 +132,20 @@ def test_straightforward_flow(env, config, make_repo, users):
         (users['reviewer'], 'hansen r+ rebase-ff'),
         seen(env, pr, users),
         (users['user'], 'Merge method set to rebase and fast-forward.'),
-        (users['user'], '@%s @%s this pull request has forward-port PRs awaiting action (not merged or closed):\n- %s' % (
-            users['other'], users['reviewer'],
-            '\n- '.join((pr1 | pr2).mapped('display_name'))
-        )),
+    ]
+    pr1_remote = prod.get_pr(pr1.number)
+    assert pr1_remote.comments == [
+        seen(env, pr1_remote, users),
+        (users['user'], """\
+This PR targets b and is part of the forward-port chain. Further PRs will be created up to c.
+
+More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
+"""),
+        (users['user'], "@%s @%s this forward port of %s is awaiting action (not merged or closed)." % (
+            users['other'],
+            users['reviewer'],
+            pr0.display_name,
+        ))
     ]
 
     assert pr0_ == pr0
@@ -168,6 +178,11 @@ More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
             users['other'], users['reviewer'],
             pr1.display_name,
     )),
+        (users['user'], "@%s @%s this forward port of %s is awaiting action (not merged or closed)." % (
+            users['other'],
+            users['reviewer'],
+            pr0.display_name,
+        ))
     ]
     with prod:
         prod.post_status(pr2.head, 'success', 'ci/runbot')
@@ -231,7 +246,7 @@ More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
     assert other_user_repo.get_ref(pr.ref) == p_1
 
     # should have deleted all PR branches
-    pr1_ref = prod.get_pr(pr1.number).ref
+    pr1_ref = pr1_remote.ref
     with pytest.raises(AssertionError, match='Not Found'):
         other.get_ref(pr1_ref)
 
@@ -326,27 +341,57 @@ def test_empty(env, config, make_repo, users):
 
     awaiting = (
         users['other'],
-        '@%s @%s this pull request has forward-port PRs awaiting action (not merged or closed):\n- %s' % (
+        '@%s @%s this forward port of %s is awaiting action (not merged or closed).' % (
             users['user'], users['reviewer'],
-            fail_id.display_name
+            pr1_id.display_name
         )
     )
+    conflict = (users['user'], re_matches(
+        fr"""@{users['user']} @{users['reviewer']} cherrypicking of pull request {pr1_id.display_name} failed\.
+
+stdout:
+```
+.*
+```
+
+stderr:
+```
+.*
+```
+
+Either perform the forward-port manually \(and push to this branch, proceeding as usual\) or close this PR \(maybe\?\)\.
+
+In the former case, you may want to edit this PR message as well\.
+
+:warning: after resolving this conflict, you will need to merge it via @{project.github_prefix}\.
+
+More info at https://github\.com/odoo/odoo/wiki/Mergebot#forward-port
+""", re.DOTALL))
     assert pr1.comments == [
         (users['reviewer'], 'hansen r+'),
         seen(env, pr1, users),
+    ]
+    fail_pr = prod.get_pr(fail_id.number)
+    assert fail_pr.comments == [
+        seen(env, fail_pr, users),
+        conflict,
         awaiting,
         awaiting,
-    ], "each cron run should trigger a new message on the ancestor"
+    ], "each cron run should trigger a new message"
     # check that this stops if we close the PR
     with prod:
-        prod.get_pr(fail_id.number).close()
+        fail_pr.close()
     env.run_crons('forwardport.reminder', 'runbot_merge.feedback_cron', context={'forwardport_updated_before': FAKE_PREV_WEEK})
     assert pr1.comments == [
         (users['reviewer'], 'hansen r+'),
         seen(env, pr1, users),
-        awaiting,
-        awaiting,
     ]
+    assert fail_pr.comments == [
+        seen(env, fail_pr, users),
+        conflict,
+        awaiting,
+        awaiting,
+    ], "each cron run should trigger a new message"
 
 def test_partially_empty(env, config, make_repo):
     """ Check what happens when only some commits of the PR are now empty

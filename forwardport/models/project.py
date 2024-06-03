@@ -553,18 +553,13 @@ stderr:
             if source.merge_date > (cutoff_dt - backoff):
                 continue
             source.reminder_backoff_factor += 1
-            self.env.ref('runbot_merge.forwardport.reminder')._send(
-                repository=source.repository,
-                pull_request=source.number,
-                token_field='fp_github_token',
-                format_args={
-                    'pr': source,
-                    'outstanding': ''.join(
-                        f'\n- {pr.display_name}'
-                        for pr in sorted(prs, key=lambda p: p.number)
-                    ),
-                }
-            )
+            for pr in prs:
+                self.env.ref('runbot_merge.forwardport.reminder')._send(
+                    repository=pr.repository,
+                    pull_request=pr.number,
+                    token_field='fp_github_token',
+                    format_args={'pr': pr, 'source': source},
+                )
 
 class Stagings(models.Model):
     _inherit = 'runbot_merge.stagings'
