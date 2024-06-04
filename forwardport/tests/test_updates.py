@@ -470,10 +470,16 @@ CONFLICT (add/add): Merge conflict in h
 
 stderr:
 ```
-$$:$$:$$.$$ {pr2_id.head}
-error: could not apply $$... newfiles
-hint: $$
+$$ trace: built-in: git cherry-pick {pr2_id.head} --strategy ort
+error: could not apply {pr2_id.head[:7]}... newfiles
+hint: After resolving the conflicts, mark them with
+hint: "git add/rm <pathspec>", then run
+hint: "git cherry-pick --continue".
+hint: You can instead skip this commit with "git cherry-pick --skip".
+hint: To abort and get back to the state before "git cherry-pick",
+hint: run "git cherry-pick --abort".
+hint: Disable this message with "git config advice.mergeConflict false"
 ----------
 status:
-'''))
+```'''))
     ]

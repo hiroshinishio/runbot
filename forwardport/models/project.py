@@ -423,9 +423,13 @@ class PullRequests(models.Model):
             # switch back to the PR branch
             conf.checkout(fp_branch_name)
             # cherry-pick the squashed commit to generate the conflict
-            conf.with_params('merge.renamelimit=0', 'merge.conflictstyle=diff3')\
+            conf.with_params(
+                'merge.renamelimit=0',
+                'merge.renames=copies',
+                'merge.conflictstyle=zdiff3'
+            )\
                 .with_config(check=False)\
-                .cherry_pick(squashed, no_commit=True)
+                .cherry_pick(squashed, no_commit=True, strategy="ort")
             status = conf.stdout().status(short=True, untracked_files='no').stdout.decode()
             if err.strip():
                 err = err.rstrip() + '\n----------\nstatus:\n' + status
@@ -459,7 +463,7 @@ stderr:
         logger = _logger.getChild(str(self.id)).getChild('cherrypick')
 
         # original head so we can reset
-        prev = original_head = working_copy.stdout().rev_parse('HEAD').stdout.decode().strip()
+        original_head = working_copy.stdout().rev_parse('HEAD').stdout.decode().strip()
 
         commits = self.commits()
         logger.info("%s: copy %s commits to %s\n%s", self, len(commits), original_head, '\n'.join(
@@ -467,6 +471,13 @@ stderr:
             for c in commits
         ))
 
+        conf_base = working_copy.with_params(
+            'merge.renamelimit=0',
+            'merge.renames=copies',
+        ).with_config(
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            check=False
+        )
         for commit in commits:
             commit_sha = commit['sha']
             # config (global -c) or commit options don't really give access to
@@ -481,19 +492,10 @@ stderr:
             }
             configured = working_copy.with_config(env=env)
 
-            conf = working_copy.with_config(
-                env={**env, 'GIT_TRACE': 'true'},
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                check=False
-            )
+            conf = conf_base.with_config(env={**env, 'GIT_TRACE': 'true'})
             # first try with default / low renamelimit
-            r = conf.cherry_pick(commit_sha)
+            r = conf.cherry_pick(commit_sha, strategy="ort")
             logger.debug("Cherry-picked %s: %s\n%s\n%s", commit_sha, r.returncode, r.stdout.decode(), _clean_rename(r.stderr.decode()))
-            if r.returncode:
-                # if it failed, retry with high renamelimit
-                configured.reset('--hard', prev)
-                r = conf.with_params('merge.renamelimit=0').cherry_pick(commit_sha)
-                logger.debug("Cherry-picked %s (renamelimit=0): %s\n%s\n%s", commit_sha, r.returncode, r.stdout.decode(), _clean_rename(r.stderr.decode()))
 
             if r.returncode: # pick failed, reset and bail
                 # try to log inflateInit: out of memory errors as warning, they
@@ -516,8 +518,8 @@ stderr:
             configured \
                 .with_config(input=str(msg).encode())\
                 .commit(amend=True, file='-')
-            prev = configured.stdout().rev_parse('HEAD').stdout.decode()
-            logger.info('%s: success -> %s', commit_sha, prev)
+            result = configured.stdout().rev_parse('HEAD').stdout.decode()
+            logger.info('%s: success -> %s', commit_sha, result)
 
     def _make_fp_message(self, commit):
         cmap = json.loads(self.commits_map)
