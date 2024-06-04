@@ -2,7 +2,7 @@ import re
 import time
 from operator import itemgetter
 
-from utils import make_basic, Commit, validate_all, re_matches, seen, REF_PATTERN, to_pr
+from utils import make_basic, Commit, validate_all, matches, seen, REF_PATTERN, to_pr
 
 
 def test_conflict(env, config, make_repo, users):
@@ -59,39 +59,39 @@ def test_conflict(env, config, make_repo, users):
     assert prod.read_tree(c) == {
         'f': 'c',
         'g': 'a',
-        'h': re_matches(r'''<<<\x3c<<< HEAD
+        'h': matches('''<<<\x3c<<< HEAD
 a
-|||||||| parent of [\da-f]{7,}.*
+||||||| parent of $$ (temp)
 =======
 xxx
->>>\x3e>>> [\da-f]{7,}.*
+>>>\x3e>>> $$ (temp)
 '''),
     }
     assert prc.comments == [
         seen(env, prc, users),
-        (users['user'], re_matches(
-fr'''@{users['user']} @{users['reviewer']} cherrypicking of pull request {pra_id.display_name} failed\.
+        (users['user'], matches(
+f'''@{users['user']} @{users['reviewer']} cherrypicking of pull request {pra_id.display_name} failed.
 
 stdout:
 ```
 Auto-merging h
-CONFLICT \(add/add\): Merge conflict in h
+CONFLICT (add/add): Merge conflict in h
 
 ```
 
 stderr:
 ```
-.*
+$$
 ```
 
-Either perform the forward-port manually \(and push to this branch, proceeding as usual\) or close this PR \(maybe\?\)\.
+Either perform the forward-port manually (and push to this branch, proceeding as usual) or close this PR (maybe?).
 
-In the former case, you may want to edit this PR message as well\.
+In the former case, you may want to edit this PR message as well.
 
-:warning: after resolving this conflict, you will need to merge it via @{project.github_prefix}\.
+:warning: after resolving this conflict, you will need to merge it via @{project.github_prefix}.
 
-More info at https://github\.com/odoo/odoo/wiki/Mergebot#forward-port
-''', re.DOTALL))
+More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
+'''))
     ]
 
     prb = prod.get_pr(prb_id.number)
@@ -372,7 +372,7 @@ b
 
     assert pr2.comments == [
         seen(env, pr2, users),
-        (users['user'], re_matches(r'@%s @%s .*CONFLICT' % (users['user'], users['reviewer']), re.DOTALL)),
+        (users['user'], matches('@%s @%s $$CONFLICT' % (users['user'], users['reviewer']))),
         (users['reviewer'], 'hansen r+'),
         (users['user'], f"@{users['user']} @{users['reviewer']} unable to stage: "
                         "All commits must have author and committer email, "

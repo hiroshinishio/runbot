@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from utils import seen, Commit, make_basic, REF_PATTERN, MESSAGE_TEMPLATE, validate_all, part_of, to_pr, re_matches
+from utils import seen, Commit, make_basic, REF_PATTERN, MESSAGE_TEMPLATE, validate_all, part_of, to_pr, matches
 
 FMT = '%Y-%m-%d %H:%M:%S'
 FAKE_PREV_WEEK = (datetime.now() + timedelta(days=1)).strftime(FMT)
@@ -346,27 +346,27 @@ def test_empty(env, config, make_repo, users):
             pr1_id.display_name
         )
     )
-    conflict = (users['user'], re_matches(
-        fr"""@{users['user']} @{users['reviewer']} cherrypicking of pull request {pr1_id.display_name} failed\.
+    conflict = (users['user'], matches(
+        f"""@{users['user']} @{users['reviewer']} cherrypicking of pull request {pr1_id.display_name} failed.
 
 stdout:
 ```
-.*
+$$
 ```
 
 stderr:
 ```
-.*
+$$
 ```
 
-Either perform the forward-port manually \(and push to this branch, proceeding as usual\) or close this PR \(maybe\?\)\.
+Either perform the forward-port manually (and push to this branch, proceeding as usual) or close this PR (maybe?).
 
-In the former case, you may want to edit this PR message as well\.
+In the former case, you may want to edit this PR message as well.
 
-:warning: after resolving this conflict, you will need to merge it via @{project.github_prefix}\.
+:warning: after resolving this conflict, you will need to merge it via @{project.github_prefix}.
 
-More info at https://github\.com/odoo/odoo/wiki/Mergebot#forward-port
-""", re.DOTALL))
+More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
+"""))
     assert pr1.comments == [
         (users['reviewer'], 'hansen r+'),
         seen(env, pr1, users),

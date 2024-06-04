@@ -10,7 +10,7 @@ import requests
 from lxml import html
 
 import odoo
-from utils import _simple_init, seen, re_matches, get_partner, Commit, pr_page, to_pr, part_of, ensure_one
+from utils import _simple_init, seen, matches, get_partner, Commit, pr_page, to_pr, part_of, ensure_one
 
 
 @pytest.fixture
@@ -174,7 +174,7 @@ def test_trivial_flow(env, repo, page, users, config):
             ('', 'Reviewer'),
         ]),
         # staging succeeded
-        (re_matches(r'.*'), f'<p>staging {st.id} succeeded</p>', [
+        (matches('$$'), f'<p>staging {st.id} succeeded</p>', [
             # set merge date
             (False, pr_id.merge_date + 'Z'),
             # updated state
@@ -676,7 +676,7 @@ def test_ff_failure(env, repo, config, page):
     _new, prev = doc.cssselect('li.staging')
 
     assert 'bg-gray-lighter' in prev.classes, "ff failure is ~ cancelling"
-    assert prev.get('title') == re_matches('fast forward failed \(update is not a fast forward\)')
+    assert 'fast forward failed (update is not a fast forward)' in prev.get('title')
 
     assert env['runbot_merge.pull_requests'].search([
         ('repository.name', '=', repo.name),
@@ -1029,7 +1029,7 @@ def test_rebase_failure(env, repo, users, config):
     assert pr_a.comments == [
         (users['reviewer'], 'hansen r+'),
         seen(env, pr_a, users),
-        (users['user'], re_matches(r'^Unable to stage PR')),
+        (users['user'], matches('Unable to stage PR')),
     ]
     assert pr_b.comments == [
         (users['reviewer'], 'hansen r+'),
@@ -3968,7 +3968,7 @@ class TestInfrastructure:
         assert repo.get_ref('heads/master') == m1
 
 def node(name, *children):
-    assert type(name) in (str, re_matches)
+    assert type(name) in (str, matches)
     return name, frozenset(children)
 def log_to_node(log):
     log = list(log)

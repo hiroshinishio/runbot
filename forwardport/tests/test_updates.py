@@ -6,7 +6,7 @@ import re
 
 import pytest
 
-from utils import seen, re_matches, Commit, make_basic, to_pr
+from utils import seen, matches, Commit, make_basic, to_pr
 
 
 @pytest.mark.parametrize("merge_parent", [False, True])
@@ -433,12 +433,12 @@ def test_subsequent_conflict(env, make_repo, config, users):
     assert repo.read_tree(repo.commit(pr3_id.head)) == {
         'f': 'c',
         'g': 'a',
-        'h': re_matches(r'''<<<\x3c<<< HEAD
+        'h': matches('''<<<\x3c<<< HEAD
 a
-|||||||| parent of [\da-f]{7,}.*
+||||||| parent of $$ (temp)
 =======
 conflict!
->>>\x3e>>> [\da-f]{7,}.*
+>>>\x3e>>> $$ (temp)
 '''),
         'x': '0',
     }
@@ -458,18 +458,22 @@ conflict!
     # 1. link to status page
     # 2. forward-port chain thing
     assert repo.get_pr(pr3_id.number).comments[2:] == [
-        (users['user'], re_matches(f'''\
+        (users['user'], matches(f'''\
 @{users['user']} @{users['reviewer']} WARNING: the update of {pr2_id.display_name} to {pr2_id.head} has caused a \
 conflict in this pull request, data may have been lost.
 
 stdout:
-```.*?
-CONFLICT \(add/add\): Merge conflict in h.*?
+```
+Auto-merging h
+CONFLICT (add/add): Merge conflict in h
 ```
 
 stderr:
 ```
-\\d{{2}}:\\d{{2}}:\\d{{2}}.\\d+ .* {pr2_id.head}
-error: could not apply [0-9a-f]+\\.\\.\\. newfiles
-''', re.DOTALL))
+$$:$$:$$.$$ {pr2_id.head}
+error: could not apply $$... newfiles
+hint: $$
+----------
+status:
+'''))
     ]

@@ -42,18 +42,26 @@ def _simple_init(repo):
     prx = repo.make_pr(title='title', body='body', target='master', head=c2)
     return prx
 
-class re_matches:
+class matches(str):
+    # necessary so str.__new__ does not freak out on `flags`
+    def __new__(cls, pattern, flags=0):
+        return super().__new__(cls, pattern)
+
     def __init__(self, pattern, flags=0):
-        self._r = re.compile(pattern, flags)
+        p, n = re.subn(
+            # `re.escape` will escape the `$`, so we need to handle that...
+            # maybe it should not be $?
+            r'\\\$(\w*?)\\\$',
+            lambda m: f'(?P<{m[1]}>.*?)' if m[1] else '(.*?)',
+            re.escape(self),
+        )
+        assert n, f"matches' pattern should have at least one placeholder, found none in\n{pattern}"
+        self._r = re.compile(p, flags | re.DOTALL)
 
     def __eq__(self, text):
-        return self._r.match(text)
-
-    def __str__(self):
-        return re.sub(r'\\(.)', r'\1', self._r.pattern)
-
-    def __repr__(self):
-        return repr(str(self))
+        if not isinstance(text, str):
+            return NotImplemented
+        return self._r.search(text)
 
 def seen(env, pr, users):
     url = to_pr(env, pr).url
