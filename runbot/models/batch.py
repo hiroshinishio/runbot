@@ -317,6 +317,11 @@ class Batch(models.Model):
                 base_foreign_bundles = bundle.search([('name', '=', bundle.base_id.name), ('project_id', 'in', foreign_projects.ids)])
                 _fill_missing({branch: branch.head for branch in base_foreign_bundles.mapped('branch_ids')}, 'base_head')
 
+        # 5. FIND missing commit in foreign project
+        if missing_repos and foreign_projects and missing_repos.mapped('single_version'):
+            base_foreign_bundles = bundle.search([('is_base', '=', True), ('version_id', 'in', missing_repos.mapped('single_version').ids), ('project_id', 'in', foreign_projects.ids)])
+            _fill_missing({branch: branch.head for branch in base_foreign_bundles.mapped('branch_ids')}, 'base_head')
+
         # CHECK missing commit
         if missing_repos:
             _logger.warning('Missing repo %s for batch %s', missing_repos.mapped('name'), self.id)
