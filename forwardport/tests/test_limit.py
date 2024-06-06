@@ -421,6 +421,7 @@ def post_merge(env, config, users, make_repo, branches):
             })
         ]
     })
+    env['runbot_merge.events_sources'].create({'repository': prod.name})
 
     env['res.partner'].search([
         ('github_login', '=', config['role_reviewer']['user'])

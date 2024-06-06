@@ -1,18 +1,5 @@
-import pytest
-
 from utils import Commit, to_pr
 
-
-@pytest.fixture
-def repo(env, project, make_repo, users, setreviewers):
-    r = make_repo('repo')
-    project.write({'repo_ids': [(0, 0, {
-        'name': r.name,
-        'group_id': False,
-        'required_statuses': 'default'
-    })]})
-    setreviewers(*project.repo_ids)
-    return r
 
 def test_staging_disabled_branch(env, project, repo, config):
     """Check that it's possible to disable staging on a specific branch

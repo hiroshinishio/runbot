@@ -19,39 +19,42 @@ from utils import seen, get_partner, pr_page, to_pr, Commit
 
 
 @pytest.fixture
-def repo_a(project, make_repo, setreviewers):
+def repo_a(env, project, make_repo, setreviewers):
     repo = make_repo('a')
-    r = project.env['runbot_merge.repository'].create({
+    r = env['runbot_merge.repository'].create({
         'project_id': project.id,
         'name': repo.name,
         'required_statuses': 'default',
         'group_id': False,
     })
     setreviewers(r)
+    env['runbot_merge.events_sources'].create({'repository': r.name})
     return repo
 
 @pytest.fixture
-def repo_b(project, make_repo, setreviewers):
+def repo_b(env, project, make_repo, setreviewers):
     repo = make_repo('b')
-    r = project.env['runbot_merge.repository'].create({
+    r = env['runbot_merge.repository'].create({
         'project_id': project.id,
         'name': repo.name,
         'required_statuses': 'default',
         'group_id': False,
     })
     setreviewers(r)
+    env['runbot_merge.events_sources'].create({'repository': r.name})
     return repo
 
 @pytest.fixture
-def repo_c(project, make_repo, setreviewers):
+def repo_c(env, project, make_repo, setreviewers):
     repo = make_repo('c')
-    r = project.env['runbot_merge.repository'].create({
+    r = env['runbot_merge.repository'].create({
         'project_id': project.id,
         'name': repo.name,
         'required_statuses': 'default',
         'group_id': False,
     })
     setreviewers(r)
+    env['runbot_merge.events_sources'].create({'repository': r.name})
     return repo
 
 def make_pr(repo, prefix, trees, *, target='master', user,
@@ -934,6 +937,7 @@ class TestSubstitutions:
             'repo_ids': [(0, 0, {'name': 'xxx/xxx'})],
             'branch_ids': [(0, 0, {'name': 'master'})]
         })
+        env['runbot_merge.events_sources'].create({'repository': 'xxx/xxx'})
         r = p.repo_ids
         # replacement pattern, pr label, stored label
         cases = [
@@ -1001,8 +1005,7 @@ class TestSubstitutions:
         with repo_a:
             repo_a.make_commits('master', repo_a.Commit('bop', tree={'a': '1'}), ref='heads/abranch')
             pra = repo_a.make_pr(target='master', head='abranch')
-        b_fork = repo_b.fork()
-        with b_fork, repo_b:
+        with repo_b, repo_b.fork() as b_fork:
             b_fork.make_commits('master', b_fork.Commit('pob', tree={'b': '1'}), ref='heads/abranch')
             prb = repo_b.make_pr(
                 title="a pr",
@@ -1058,6 +1061,7 @@ def test_multi_project(env, make_repo, setreviewers, users, config,
         'branch_ids': [(0, 0, {'name': 'default'})],
     })
     setreviewers(*p1.repo_ids)
+    env['runbot_merge.events_sources'].create([{'repository': r1.name}])
 
     r2 = make_repo('repo_b')
     with r2:
@@ -1078,6 +1082,7 @@ def test_multi_project(env, make_repo, setreviewers, users, config,
         'branch_ids': [(0, 0, {'name': 'default'})],
     })
     setreviewers(*p2.repo_ids)
+    env['runbot_merge.events_sources'].create([{'repository': r2.name}])
 
     assert r1_dev.owner == r2_dev.owner
 

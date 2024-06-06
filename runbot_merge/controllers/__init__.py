@@ -86,18 +86,18 @@ class MergebotController(Controller):
 
         github._gh.info(self._format(req))
 
-        c = EVENTS.get(event)
-        if not c:
-            _logger.warning('Unknown event %s', event)
-            return 'Unknown event {}'.format(event)
-
-        repo = request.jsonrequest['repository']['full_name']
+        repo = request.jsonrequest.get('repository', {}).get('full_name')
         env = request.env(user=1)
 
-        secret = env['runbot_merge.repository'].search([
-            ('name', '=', repo),
-        ]).project_id.secret
-        if secret and secret.strip():
+        source = repo and env['runbot_merge.events_sources'].search([('repository', '=', repo)])
+        if not source:
+            _logger.warning(
+                "Ignored hook %s to unknown source repository %s",
+                req.headers.get("X-Github-Delivery"),
+                repo,
+            )
+            return werkzeug.exceptions.Forbidden()
+        elif secret := source.secret:
             signature = 'sha256=' + hmac.new(secret.strip().encode(), req.get_data(), hashlib.sha256).hexdigest()
             if not hmac.compare_digest(signature, req.headers.get('X-Hub-Signature-256', '')):
                 _logger.warning(
@@ -113,6 +113,11 @@ class MergebotController(Controller):
             _logger.info("No secret for %s but received a signature in:\n%s", repo, req.headers)
         else:
             _logger.info("No secret or signature for %s", repo)
+
+        c = EVENTS.get(event)
+        if not c:
+            _logger.warning('Unknown event %s', event)
+            return 'Unknown event {}'.format(event)
 
         sentry_sdk.set_context('webhook', request.jsonrequest)
         return c(env, request.jsonrequest)

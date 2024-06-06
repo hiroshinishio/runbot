@@ -6,4 +6,5 @@ from . import batch
 from . import project_freeze
 from . import stagings_create
 from . import staging_cancel
+from . import events_sources
 from . import crons

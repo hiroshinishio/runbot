@@ -130,6 +130,7 @@ def make_basic(
         })
 
     prod = make_repo(reponame)
+    env['runbot_merge.events_sources'].create({'repository': prod.name})
     with prod:
         a_0, a_1, a_2, a_3, a_4, = prod.make_commits(
             None,

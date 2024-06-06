@@ -29,7 +29,6 @@
                                    help="Identity when creating new commits, defaults to github name, falls back to login."/>
                             <field name="github_email" readonly="0"
                                    help="Identity when creating new commits, defaults to public email, falls back to primary email."/>
-                            <field name="secret"/>
                             <span attrs="{'invisible': [
                                 '|',
                                     ('staging_statuses', '=', False),

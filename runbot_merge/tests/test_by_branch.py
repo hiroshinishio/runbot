@@ -2,28 +2,21 @@ import pytest
 
 from utils import Commit
 
-
 @pytest.fixture
-def repo(env, project, make_repo, users, setreviewers):
-    r = make_repo('repo')
-    project.write({
-        'repo_ids': [(0, 0, {
-            'name': r.name,
-            'status_ids': [
-                (0, 0, {'context': 'ci'}),
-                # require the lint status on master
-                (0, 0, {
-                    'context': 'lint',
-                    'branch_filter': [('id', '=', project.branch_ids.id)]
-                }),
-                (0, 0, {'context': 'pr', 'stagings': False}),
-                (0, 0, {'context': 'staging', 'prs': False}),
-            ]
-        })],
-    })
-    setreviewers(*project.repo_ids)
-    return r
+def _setup_statuses(project, repo):
+    project.repo_ids.status_ids = [
+        (5, 0, 0),
+        (0, 0, {'context': 'ci'}),
+        # require the lint status on master
+        (0, 0, {
+            'context': 'lint',
+            'branch_filter': [('id', '=', project.branch_ids.id)]
+        }),
+        (0, 0, {'context': 'pr', 'stagings': False}),
+        (0, 0, {'context': 'staging', 'prs': False}),
+    ]
 
+@pytest.mark.usefixtures('_setup_statuses')
 def test_status_applies(env, repo, config):
     """ If branches are associated with a repo status, only those branch should
     require the status on their PRs & stagings
@@ -71,6 +64,7 @@ def test_status_applies(env, repo, config):
     env.run_crons('runbot_merge.process_updated_commits')
     assert st.state == 'success'
 
+@pytest.mark.usefixtures('_setup_statuses')
 def test_status_skipped(env, project, repo, config):
     """ Branches not associated with a repo status should not require the status
     on their PRs or stagings
@@ -132,6 +126,7 @@ def test_pseudo_version_tag(env, project, make_repo, setreviewers, config):
         ],
     })
     setreviewers(*project.repo_ids)
+    env['runbot_merge.events_sources'].create({'repository': repo.name})
 
     with repo:
         [m] = repo.make_commits(None, Commit('c1', tree={'a': '1'}), ref='heads/master')

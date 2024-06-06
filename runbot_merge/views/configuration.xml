@@ -63,6 +63,21 @@
         </field>
     </record>
 
+    <record id="action_events_sources" model="ir.actions.act_window">
+        <field name="name">Events Sources</field>
+        <field name="res_model">runbot_merge.events_sources</field>
+    </record>
+    <record id="tree_events_sources" model="ir.ui.view">
+        <field name="name">Events Sources List</field>
+        <field name="model">runbot_merge.events_sources</field>
+        <field name="arch" type="xml">
+            <tree editable="bottom">
+                <field name="repository"/>
+                <field name="secret"/>
+            </tree>
+        </field>
+    </record>
+
     <menuitem name="Configuration" id="menu_configuration" parent="runbot_merge_menu">
         <menuitem name="CI Overrides" id="menu_configuration_overrides"
                   action="action_overrides"/>
@@ -70,5 +85,7 @@
                   action="action_review"/>
         <menuitem name="Feedback Templates" id="menu_configuration_feedback"
                   action="action_feedback"/>
+        <menuitem name="Events Sources" id="menu_configuration_events_sources"
+                  action="action_events_sources"/>
     </menuitem>
 </odoo>

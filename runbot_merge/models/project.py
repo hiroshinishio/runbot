@@ -55,12 +55,6 @@ class Project(models.Model):
     batch_limit = fields.Integer(
         default=8, group_operator=None, help="Maximum number of PRs staged together")
 
-    secret = fields.Char(
-        help="Webhook secret. If set, will be checked against the signature "
-             "of (valid) incoming webhook signatures, failing signatures "
-             "will lead to webhook rejection. Should only use ASCII."
-    )
-
     freeze_id = fields.Many2one('runbot_merge.project.freeze', compute='_compute_freeze')
     freeze_reminder = fields.Text()
 

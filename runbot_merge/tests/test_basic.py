@@ -12,17 +12,9 @@ from lxml import html
 import odoo
 from utils import _simple_init, seen, matches, get_partner, Commit, pr_page, to_pr, part_of, ensure_one
 
-
-@pytest.fixture
-def repo(env, project, make_repo, users, setreviewers):
-    r = make_repo('repo')
-    project.write({'repo_ids': [(0, 0, {
-        'name': r.name,
-        'group_id': False,
-        'required_statuses': 'legal/cla,ci/runbot'
-    })]})
-    setreviewers(*project.repo_ids)
-    return r
+@pytest.fixture(autouse=True)
+def _configure_statuses(project, repo):
+    project.repo_ids.required_statuses = 'legal/cla,ci/runbot'
 
 @pytest.fixture(autouse=True, params=["statuses", "rpc"])
 def stagings(request, env, project, repo):
@@ -353,11 +345,15 @@ Co-authored-by: Bob <bob@example.com>""".format(
         )
 
 class TestWebhookSecurity:
+    @pytest.fixture(autouse=True)
+    def add_secret_to_source(self, env, repo):
+        env['runbot_merge.events_sources'].search([
+            ('repository', '=', repo.name),
+        ]).secret = "a secret"
+
     def test_no_secret(self, env, project, repo):
         """ Test 1: didn't add a secret to the repo, should be ignored
         """
-        project.secret = "a secret"
-
         with repo:
             m = repo.make_commit(None, "initial", None, tree={'a': 'some content'})
             repo.make_ref('heads/master', m)
@@ -371,7 +367,6 @@ class TestWebhookSecurity:
         ])
 
     def test_wrong_secret(self, env, project, repo):
-        project.secret = "a secret"
         with repo:
             repo.set_secret("wrong secret")
 
@@ -387,7 +382,6 @@ class TestWebhookSecurity:
         ])
 
     def test_correct_secret(self, env, project, repo):
-        project.secret = "a secret"
         with repo:
             repo.set_secret("a secret")
 
@@ -2789,7 +2783,7 @@ class TestBatching(object):
     def test_batching_pressing(self, env, repo, config):
         """ "Pressing" PRs should be selected before normal & batched together
         """
-        # by limiting the batch size to 3 we allow both high-priority PRs, but 
+        # by limiting the batch size to 3 we allow both high-priority PRs, but
         # a single normal priority one
         env['runbot_merge.project'].search([]).batch_limit = 3
         with repo:

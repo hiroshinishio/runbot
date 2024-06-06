@@ -96,7 +96,7 @@ def test_unreviewer(env, project, port):
 
     assert p.review_rights == env['res.partner.review']
 
-def test_staging_post_update(env, project, make_repo, setreviewers, users, config):
+def test_staging_post_update(env, repo, users, config):
     """Because statuses come from commits, it's possible to update the commits
     of a staging after that staging has completed (one way or the other), either
     by sending statuses directly (e.g. rebuilding, for non-deterministic errors)
@@ -105,21 +105,13 @@ def test_staging_post_update(env, project, make_repo, setreviewers, users, confi
     This makes post-mortem analysis quite confusing, so stagings should
     "lock in" their statuses once they complete.
     """
-    repo = make_repo('repo')
-    project.write({'repo_ids': [(0, 0, {
-        'name': repo.name,
-        'group_id': False,
-        'required_statuses': 'legal/cla,ci/runbot'
-    })]})
-    setreviewers(*project.repo_ids)
 
     with repo:
         [m] = repo.make_commits(None, Commit('initial', tree={'m': 'm'}), ref='heads/master')
 
         repo.make_commits(m, Commit('thing', tree={'m': 'c'}), ref='heads/other')
         pr = repo.make_pr(target='master', head='other')
-        repo.post_status(pr.head, 'success', 'ci/runbot')
-        repo.post_status(pr.head, 'success', 'legal/cla')
+        repo.post_status(pr.head, 'success')
         pr.post_comment('hansen r+ rebase-merge', config['role_reviewer']['token'])
     env.run_crons()
     pr_id = to_pr(env, pr)
@@ -128,33 +120,25 @@ def test_staging_post_update(env, project, make_repo, setreviewers, users, confi
 
     staging_head = repo.commit('staging.master')
     with repo:
-        repo.post_status(staging_head, 'failure', 'ci/runbot')
+        repo.post_status(staging_head, 'failure')
     env.run_crons()
     assert pr_id.state == 'error'
     assert staging_id.state == 'failure'
     assert staging_id.statuses == [
-        [repo.name, 'ci/runbot', 'failure', ''],
+        [repo.name, 'default', 'failure', ''],
     ]
 
     with repo:
-        repo.post_status(staging_head, 'success', 'ci/runbot')
+        repo.post_status(staging_head, 'success')
     env.run_crons()
     assert staging_id.state == 'failure'
     assert staging_id.statuses == [
-        [repo.name, 'ci/runbot', 'failure', ''],
+        [repo.name, 'default', 'failure', ''],
     ]
 
-def test_merge_empty_commits(env, project, make_repo, setreviewers, users, config):
+def test_merge_empty_commits(env, repo, users, config):
     """The mergebot should allow merging already-empty commits.
     """
-    repo = make_repo('repo')
-    project.write({'repo_ids': [(0, 0, {
-        'name': repo.name,
-        'group_id': False,
-        'required_statuses': 'default',
-    })]})
-    setreviewers(*project.repo_ids)
-
     with repo:
         [m] = repo.make_commits(None, Commit('initial', tree={'m': 'm'}), ref='heads/master')
 
@@ -187,18 +171,10 @@ def test_merge_empty_commits(env, project, make_repo, setreviewers, users, confi
     assert commits[1]['commit']['message'].startswith('thing1')
     assert commits[2]['commit']['message'] == 'initial'
 
-def test_merge_emptying_commits(env, project, make_repo, setreviewers, users, config):
+def test_merge_emptying_commits(env, repo, users, config):
     """The mergebot should *not* allow merging non-empty commits which become
     empty as part of the staging (rebasing)
     """
-    repo = make_repo('repo')
-    project.write({'repo_ids': [(0, 0, {
-        'name': repo.name,
-        'group_id': False,
-        'required_statuses': 'default',
-    })]})
-    setreviewers(*project.repo_ids)
-
     with repo:
         [m, _] = repo.make_commits(
             None,
@@ -253,15 +229,7 @@ def test_merge_emptying_commits(env, project, make_repo, setreviewers, users, co
         (users['user'], f"{ping} unable to stage: results in an empty tree when merged, might be the duplicate of a merged PR.")
     ]
 
-def test_force_ready(env, make_repo, project, setreviewers, config):
-    repo = make_repo('repo')
-    project.write({'repo_ids': [(0, 0, {
-        'name': repo.name,
-        'group_id': False,
-        'required_statuses': 'default',
-    })]})
-    setreviewers(*project.repo_ids)
-
+def test_force_ready(env, repo, config):
     with repo:
         [m] = repo.make_commits(None, Commit('initial', tree={'m': 'm'}), ref="heads/master")
 

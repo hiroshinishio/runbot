@@ -452,6 +452,10 @@ def check(response):
 # to) break the existing local tests
 @pytest.fixture
 def make_repo(capsys, request, config, tunnel, users):
+    """Fixtures which creates a repository on the github side, plugs webhooks
+    in, and registers the repository for deletion on cleanup (unless
+    ``--no-delete`` is set)
+    """
     owner = config['github']['owner']
     github = requests.Session()
     github.headers['Authorization'] = 'token %s' % config['github']['token']

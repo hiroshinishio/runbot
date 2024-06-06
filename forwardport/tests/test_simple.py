@@ -35,7 +35,6 @@ def test_straightforward_flow(env, config, make_repo, users):
     other_user = config['role_other']
     other_user_repo = prod.fork(token=other_user['token'])
 
-    project = env['runbot_merge.project'].search([])
     b_head = prod.commit('b')
     c_head = prod.commit('c')
     with prod, other_user_repo:

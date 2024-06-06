@@ -4,19 +4,10 @@ without wider relevance and thus other location.
 from utils import Commit, to_pr
 
 
-def test_close_single(env, project, make_repo, setreviewers):
+def test_close_single(env, repo):
     """If a batch has a single PR and that PR gets closed, the batch should be
     inactive *and* blocked.
     """
-    repo = make_repo('wheee')
-    r = env['runbot_merge.repository'].create({
-        'project_id': project.id,
-        'name': repo.name,
-        'required_statuses': 'default',
-        'group_id': False,
-    })
-    setreviewers(r)
-
     with repo:
         repo.make_commits(None, Commit("a", tree={"a": "a"}), ref='heads/master')
         [c] = repo.make_commits('master', Commit('b', tree={"b": "b"}))
@@ -41,25 +32,13 @@ def test_close_single(env, project, make_repo, setreviewers):
 
     assert Batches.search_count([]) == 0
 
-def test_close_multiple(env, project, make_repo, setreviewers):
+def test_close_multiple(env, make_repo2):
     """If a batch has a single PR and that PR gets closed, the batch should be
     inactive *and* blocked.
     """
     Batches = env['runbot_merge.batch']
-    repo1 = make_repo('wheee')
-    repo2 = make_repo('wheeee')
-    project.write({
-        'repo_ids': [(0, 0, {
-            'name': repo1.name,
-            'required_statuses': 'default',
-            'group_id': False,
-        }), (0, 0, {
-            'name': repo2.name,
-            'required_statuses': 'default',
-            'group_id': False,
-        })]
-    })
-    setreviewers(*project.repo_ids)
+    repo1 = make_repo2('wheee')
+    repo2 = make_repo2('wheeee')
 
     with repo1:
         repo1.make_commits(None, Commit("a", tree={"a": "a"}), ref='heads/master')

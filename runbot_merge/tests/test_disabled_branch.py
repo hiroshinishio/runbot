@@ -23,6 +23,7 @@ def test_existing_pr_disabled_branch(env, project, make_repo, setreviewers, conf
         'group_id': False,
     })
     setreviewers(*project.repo_ids)
+    env['runbot_merge.events_sources'].create({'repository': repo.name})
 
     with repo:
         [m] = repo.make_commits(None, Commit('root', tree={'a': '1'}), ref='heads/master')
@@ -107,6 +108,7 @@ def test_new_pr_no_branch(env, project, make_repo, setreviewers, users):
         'status_ids': [(0, 0, {'context': 'status'})]
     })
     setreviewers(*project.repo_ids)
+    env['runbot_merge.events_sources'].create({'repository': repo.name})
 
     with repo:
         [m] = repo.make_commits(None, Commit('root', tree={'a': '1'}), ref='heads/master')
@@ -140,6 +142,7 @@ def test_new_pr_disabled_branch(env, project, make_repo, setreviewers, users):
         'active': False,
     })
     setreviewers(*project.repo_ids)
+    env['runbot_merge.events_sources'].create({'repository': repo.name})
 
     with repo:
         [m] = repo.make_commits(None, Commit('root', tree={'a': '1'}), ref='heads/master')

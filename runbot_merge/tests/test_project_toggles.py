@@ -6,17 +6,6 @@ import pytest
 from utils import Commit, to_pr, ensure_one
 
 
-@pytest.fixture
-def repo(env, project, make_repo, users, setreviewers):
-    r = make_repo('repo')
-    project.write({'repo_ids': [(0, 0, {
-        'name': r.name,
-        'group_id': False,
-        'required_statuses': 'default',
-    })]})
-    setreviewers(*project.repo_ids)
-    return r
-
 def test_disable_staging(env, project, repo, config):
     """In order to avoid issues of cron locking, as well as not disable staging
     for every project when trying to freeze just one of them (cough cough), a
