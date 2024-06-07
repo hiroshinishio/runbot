@@ -750,9 +750,14 @@ def test_freeze(env, config, make_repo, users):
     """Freeze:
 
     - should not forward-port the freeze PRs themselves
+    - unmerged forward ports need to be backfilled
+    - if the tip of the forward port is approved, the backfilled forward port
+      should also be
     """
-    prod, _ = make_basic(env, config, make_repo)
+    prod, _ = make_basic(env, config, make_repo, statuses='default')
     project = env['runbot_merge.project'].search([])
+
+
     # branches here are "a" (older), "b", and "c" (master)
     with prod:
         [root, _] = prod.make_commits(
@@ -762,6 +767,22 @@ def test_freeze(env, config, make_repo, users):
             ref='heads/b'
         )
         prod.make_commits(root, Commit('other', tree={'f': '1'}), ref='heads/c')
+
+    # region PR which is forward ported but the FPs are not merged (they are approved)
+    with prod:
+        prod.make_commits("a", Commit("stuff", tree={'x': '0'}), ref="heads/abranch")
+        p = prod.make_pr(target='a', head='abranch')
+        p.post_comment("hansen r+ fw=skipci", config['role_reviewer']['token'])
+        prod.post_status('abranch', 'success')
+    env.run_crons()
+    with prod:
+        prod.post_status('staging.a', 'success')
+    env.run_crons()
+    pr_a_id, pr_b_id, pr_c_id = pr_ids = env['runbot_merge.pull_requests'].search([], order='number')
+    assert len(pr_ids) == 3, \
+        "should have created two forward ports, one in b and one in c (/ master)"
+    # endregion
+
     with prod:
         prod.make_commits(
             'c',
@@ -770,6 +791,15 @@ def test_freeze(env, config, make_repo, users):
         )
         release = prod.make_pr(target='c', head='release-1.1')
     env.run_crons()
+
+    # approve pr_c_id but don't actually merge it before freezing
+    with prod:
+        prod.post_status(pr_b_id.head, 'success')
+        prod.post_status(pr_c_id.head, 'success')
+        prod.get_pr(pr_c_id.number).post_comment('hansen r+', config['role_reviewer']['token'])
+    # review comment should be handled eagerly
+    assert pr_b_id.reviewed_by
+    assert pr_c_id.reviewed_by
 
     w = project.action_prepare_freeze()
     assert w['res_model'] == 'runbot_merge.project.freeze'
@@ -780,6 +810,8 @@ def test_freeze(env, config, make_repo, users):
 
     assert not w_id.errors
     w_id.action_freeze()
+
+    assert project.branch_ids.mapped('name') == ['c', 'post-b', 'b', 'a']
 
     # re-enable forward-port cron after freeze
     _, cron_id = env['ir.model.data'].check_object_reference('forwardport', 'port_forward', context={'active_test': False})
@@ -792,8 +824,34 @@ def test_freeze(env, config, make_repo, users):
 
     assert release_id.state == 'merged'
     assert not env['runbot_merge.pull_requests'].search([
-        ('state', '!=', 'merged')
+        ('source_id', '=', release_id.id),
     ]), "the release PRs should not be forward-ported"
+
+    assert env['runbot_merge.stagings'].search_count([]) == 2,\
+        "b and c forward ports should be staged since they were ready before freeze"
+
+    # an intermediate PR should have been created
+    pr_inserted = env['runbot_merge.pull_requests'].search([
+        ('source_id', '=', pr_a_id.id),
+        ('target.name', '=', 'post-b'),
+    ])
+    assert pr_inserted, "an intermediate PR should have been reinsered in the sequence"
+    assert pr_c_id.parent_id == pr_inserted
+    assert pr_inserted.parent_id == pr_b_id
+
+    assert pr_inserted.reviewed_by == pr_c_id.reviewed_by,\
+        "review state should have been copied over from c (master)"
+    with prod:
+        prod.post_status(pr_inserted.head, 'success')
+        prod.post_status('staging.b', 'success')
+        prod.post_status('staging.c', 'success')
+    env.run_crons()
+    with prod:
+        prod.post_status('staging.post-b', 'success')
+    env.run_crons()
+
+    assert env['runbot_merge.pull_requests'].search_count([('state', '=', 'merged')]) \
+        == len(['release', 'initial', 'fw-b', 'fw-post-b', 'fw-c'])
 
 def test_missing_magic_ref(env, config, make_repo):
     """There are cases where github fails to create / publish or fails to update

@@ -108,20 +108,32 @@ class ForwardPortTasks(models.Model, Queue):
         )
         # insert new batch in ancestry sequence
         if self.source == 'insert':
-            self.env['runbot_merge.batch'].search([
-                ('parent_id', '=', batch.id),
-                ('id', '!=', newbatch.id),
-            ]).parent_id = newbatch.id
-            # insert new PRs in ancestry sequence unless conflict (= no parent)
-            for pr in newbatch.prs:
-                if not pr.parent_id:
-                    break
-                newchild = pr.search([
-                    ('parent_id', '=', pr.parent_id.id),
-                    ('id', '!=', pr.id),
-                ])
-                if newchild:
-                    newchild.parent_id = pr.id
+            self._process_insert(batch, newbatch)
+
+    def _process_insert(self, batch, newbatch):
+        self.env['runbot_merge.batch'].search([
+            ('parent_id', '=', batch.id),
+            ('id', '!=', newbatch.id),
+        ]).parent_id = newbatch.id
+        # insert new PRs in ancestry sequence unless conflict (= no parent)
+        for pr in newbatch.prs:
+            next_target = pr._find_next_target()
+            if not next_target:
+                continue
+
+            # should have one since it was inserted before an other PR?
+            descendant = pr.search([
+                ('target', '=', next_target.id),
+                ('source_id', '=', pr.source_id.id),
+            ])
+
+            # copy the reviewing of the "descendant" (even if detached) to this pr
+            if reviewer := descendant.reviewed_by:
+                pr.reviewed_by = reviewer
+
+            # replace parent_id *if not detached*
+            if descendant.parent_id:
+                descendant.parent_id = pr.id
 
     def _complete_batches(self):
         source = pr = self.pr_id
