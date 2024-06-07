@@ -287,10 +287,12 @@ def raster_render(pr):
                 '' if p['checked'] else 'unchecked',
                 '' if p['reviewed'] else 'unreviewed',
                 '' if p['attached'] else 'detached',
+                'staged' if p['pr'].staging_id else 'ready' if p['pr']._ready else ''
             ]):
                 label = f' {attribute}'
+                color = SUCCESS if attribute in ('staged', 'ready') else ERROR
                 draw.text((offset, top), label,
-                          fill=blend(ERROR, opacity, over=background),
+                          fill=blend(color, opacity, over=background),
                           font=supfont)
                 offset += supfont.getbbox(label)[2]
             offset += math.ceil(supfont.getlength(" "))
@@ -302,6 +304,7 @@ def raster_render(pr):
 Color = Tuple[int, int, int]
 TEXT: Color = (102, 102, 102)
 ERROR: Color = (220, 53, 69)
+SUCCESS: Color = (40, 167, 69)
 BG: Mapping[str | None, Color] = collections.defaultdict(lambda: (255, 255, 255), {
     'info': (217, 237, 247),
     'success': (223, 240, 216),

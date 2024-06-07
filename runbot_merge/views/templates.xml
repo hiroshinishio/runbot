@@ -597,6 +597,12 @@ action = batches
                                 <sup t-if="not p['attached']"
                                      t-attf-title="detached: {{p['pr'].detach_reason}}"
                                      class="text-warning fa fa-unlink"/>
+                                <sup t-if="p['pr'].staging_id" class="text-success">
+                                    staged
+                                </sup>
+                                <sup t-elif="p['pr']._ready" class="text-success">
+                                    ready
+                                </sup>
                             </span>
                         </td>
                         <td t-else=""/>
