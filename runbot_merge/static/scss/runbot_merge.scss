@@ -82,6 +82,11 @@ $mergebot-colors: ("success": #dff0d8, "danger": #f2dede, "warning": #fcf8e3, "i
   .batch a:not(:last-of-type) a:after {
     content: ",";
   }
+
+  button.dropdown-toggle {
+    text-align: left;
+    white-space: wrap;
+  }
 }
 .pr-listing > * { display: inline-block; }
 .pr-awaiting { opacity: 0.8; }
