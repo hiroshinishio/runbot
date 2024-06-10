@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -1163,4 +1163,105 @@ def test_maintain_batch_history(env, config, make_repo, users):
 
     assert pr1_b_id in b_batch.all_prs, "the PR is still in the batch"
     assert pr1_b_id not in b_batch.prs, "the PR is not in the open/active batch PRs"
+    # endregion
+
+FMT = '%Y-%m-%d %H:%M:%S'
+FAKE_PREV_WEEK = (datetime.now() + timedelta(days=1)).strftime(FMT)
+def test_reminder_detached(env, config, make_repo, users):
+    """On detached forward ports, both sides of the detachment should be notified.
+    """
+    # region setup
+    prod, _ = make_basic(env, config, make_repo, statuses='default')
+    with prod:
+        prod.make_commits('a', Commit('c', tree={'x': '0'}), ref="heads/abranch")
+        pr_a = prod.make_pr(target='a', head='abranch')
+        prod.post_status('abranch', 'success')
+        pr_a.post_comment('hansen r+ fw=skipci', config['role_reviewer']['token'])
+    env.run_crons()
+
+    with prod:
+        prod.post_status('staging.a', 'success')
+    env.run_crons()
+
+    pr_a_id = to_pr(env, pr_a)
+    pr_b_id = env['runbot_merge.pull_requests'].search([
+        ('target.name', '=', 'b'),
+        ('parent_id', '=', pr_a_id.id),
+    ])
+    assert pr_b_id
+    with prod:
+        prod.post_status(pr_b_id.head, 'success')
+    env.run_crons()
+    pr_c_id = env['runbot_merge.pull_requests'].search([
+        ('target.name', '=', 'c'),
+        ('parent_id', '=', pr_b_id.id),
+    ])
+    assert pr_c_id
+    # endregion
+
+    pr_b = prod.get_pr(pr_b_id.number)
+    pr_c = prod.get_pr(pr_c_id.number)
+
+    # region sanity check
+    env.run_crons('forwardport.reminder', 'runbot_merge.feedback_cron', context={'forwardport_updated_before': FAKE_PREV_WEEK})
+
+    assert pr_b.comments == [
+        seen(env, pr_b, users),
+        (users['user'], """\
+This PR targets b and is part of the forward-port chain. Further PRs will be created up to c.
+
+More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
+""")], "the intermediate PR should not be reminded"
+
+    assert pr_c.comments == [
+        seen(env, pr_c, users),
+        (users['user'], """\
+@%s @%s this PR targets c and is the last of the forward-port chain containing:
+* %s
+
+To merge the full chain, use
+> @hansen r+
+
+More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
+""" % (
+            users['user'], users['reviewer'],
+            pr_b_id.display_name,
+    )),
+        (users['user'], "@%s @%s this forward port of %s is awaiting action (not merged or closed)." % (
+            users['user'],
+            users['reviewer'],
+            pr_a_id.display_name,
+        ))
+    ], "the final PR should be reminded"
+    # endregion
+
+    # region check detached
+    pr_c_id.write({'parent_id': False, 'detach_reason': 'because'})
+    env.run_crons('forwardport.reminder', 'runbot_merge.feedback_cron', context={'forwardport_updated_before': FAKE_PREV_WEEK})
+
+    for p in env['runbot_merge.pull_requests'].search_read(
+        [], ['id', 'parent_id', 'source_id', 'display_name']
+    ):
+        print(p, flush=True)
+
+    assert pr_b.comments[2:] == [
+        (users['user'], "@%s @%s child PR %s was modified / updated and has become a normal PR. This PR (and any of its parents) will need to be merged independently as approvals won't cross." % (
+            users['user'],
+            users['reviewer'],
+            pr_c_id.display_name,
+        )),
+        (users['user'], "@%s @%s this forward port of %s is awaiting action (not merged or closed)." % (
+            users['user'],
+            users['reviewer'],
+            pr_a_id.display_name,
+        ))
+    ], "the detached-from intermediate PR should now be reminded"
+    assert pr_c.comments[3:] == [
+        (users['user'], "@%(user)s @%(reviewer)s this PR was modified / updated and has become a normal PR. It must be merged directly." % users),
+        (users['user'], "@%s @%s this forward port of %s is awaiting action (not merged or closed)." % (
+            users['user'],
+            users['reviewer'],
+            pr_a_id.display_name,
+        ))
+    ], "the final forward port should be reminded as before"
     # endregion

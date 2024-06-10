@@ -11,13 +11,14 @@ means PR creation is trickier (as mergebot assumes opened event will always
 lead to PR creation but fpbot wants to attach meaning to the PR when setting
 it up), ...
 """
+from __future__ import annotations
+
 import datetime
 import itertools
 import json
 import logging
 import operator
 import subprocess
-import sys
 import tempfile
 import typing
 from pathlib import Path
@@ -181,6 +182,8 @@ class PullRequests(models.Model):
     reviewed_by: Partner
     head: str
     state: str
+    merge_date: datetime.datetime
+    parent_id: PullRequests
 
     reminder_backoff_factor = fields.Integer(default=-4, group_operator=None)
 
@@ -529,11 +532,11 @@ stderr:
         # don't stringify so caller can still perform alterations
         return msg
 
-    def _outstanding(self, cutoff):
+    def _outstanding(self, cutoff: str) -> typing.ItemsView[PullRequests, list[PullRequests]]:
         """ Returns "outstanding" (unmerged and unclosed) forward-ports whose
         source was merged before ``cutoff`` (all of them if not provided).
 
-        :param str cutoff: a datetime (ISO-8601 formatted)
+        :param cutoff: a datetime (ISO-8601 formatted)
         :returns: an iterator of (source, forward_ports)
         """
         return groupby(self.env['runbot_merge.pull_requests'].search([
@@ -551,11 +554,17 @@ stderr:
 
         for source, prs in self._outstanding(cutoff):
             backoff = dateutil.relativedelta.relativedelta(days=2**source.reminder_backoff_factor)
-            prs = list(prs)
             if source.merge_date > (cutoff_dt - backoff):
                 continue
             source.reminder_backoff_factor += 1
+
+            # only keep the PRs which don't have an attached descendant)
+            pr_ids = {p.id for p in prs}
             for pr in prs:
+                pr_ids.discard(pr.parent_id.id)
+            print(source, prs, [p.parent_id for p in prs],
+                  '\n\t->', pr_ids, flush=True)
+            for pr in (p for p in prs if p.id in pr_ids):
                 self.env.ref('runbot_merge.forwardport.reminder')._send(
                     repository=pr.repository,
                     pull_request=pr.number,

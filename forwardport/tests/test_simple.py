@@ -139,13 +139,7 @@ def test_straightforward_flow(env, config, make_repo, users):
 This PR targets b and is part of the forward-port chain. Further PRs will be created up to c.
 
 More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
-"""),
-        (users['user'], "@%s @%s this forward port of %s is awaiting action (not merged or closed)." % (
-            users['other'],
-            users['reviewer'],
-            pr0.display_name,
-        ))
-    ]
+""")]
 
     assert pr0_ == pr0
     assert pr1_ == pr1
