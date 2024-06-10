@@ -665,7 +665,7 @@ class PullRequests(models.Model):
             match command:
                 case commands.Approve() if self.draft:
                     msg = "draft PRs can not be approved."
-                case commands.Approve() if self.parent_id:
+                case commands.Approve() if self.source_id:
                     # rules are a touch different for forwardport PRs:
                     valid = lambda _: True if command.ids is None else lambda n: n in command.ids
                     _, source_reviewer, source_author = self.source_id._pr_acl(author)
@@ -673,6 +673,10 @@ class PullRequests(models.Model):
                     ancestors = list(self._iter_ancestors())
                     # - reviewers on the original can approve any forward port
                     if source_reviewer:
+                        approveable = ancestors
+                    elif source_author:
+                        # give full review rights on all forwardports (attached
+                        # or not) to original author
                         approveable = ancestors
                     else:
                         # between the first merged ancestor and self
