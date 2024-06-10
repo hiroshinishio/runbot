@@ -396,12 +396,12 @@ class PullRequests(models.Model):
     staging_id = fields.Many2one('runbot_merge.stagings', compute='_compute_staging', store=True)
     staging_ids = fields.Many2many('runbot_merge.stagings', string="Stagings", compute='_compute_stagings', context={"active_test": False})
 
-    @api.depends('batch_id.staging_ids.active')
+    @api.depends('batch_id.batch_staging_ids.runbot_merge_stagings_id.active')
     def _compute_staging(self):
         for p in self:
             p.staging_id = p.batch_id.staging_ids.filtered('active')
 
-    @api.depends('batch_id.staging_ids')
+    @api.depends('batch_id.batch_staging_ids.runbot_merge_stagings_id')
     def _compute_stagings(self):
         for p in self:
             p.staging_ids = p.batch_id.staging_ids
