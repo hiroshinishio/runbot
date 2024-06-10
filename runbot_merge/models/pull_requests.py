@@ -1430,7 +1430,7 @@ class PullRequests(models.Model):
             template = 'runbot_merge.forwardport.linked'
             format_args = {
                 'pr': self,
-                'siblings': ', '.join(p.display_name for p in (self.batch_id - self)),
+                'siblings': ', '.join(p.display_name for p in (self.batch_id.prs - self)),
                 'footer': FOOTER,
             }
         elif not self._find_next_target():
