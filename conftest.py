@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import select
+import threading
 from typing import Optional
 
 """
@@ -94,9 +96,12 @@ def pytest_addoption(parser):
 def is_manager(config):
     return not hasattr(config, 'workerinput')
 
-# noinspection PyUnusedLocal
 def pytest_configure(config):
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'mergebot_test_utils'))
+    config.addinivalue_line(
+        "markers",
+        "expect_log_errors(reason): allow and require tracebacks in the log",
+    )
 
 def pytest_unconfigure(config):
     if not is_manager(config):
@@ -418,6 +423,19 @@ def server(request, db, port, module, addons_path, tmpdir):
     if request.config.getoption('--coverage'):
         cov = ['coverage', 'run', '-p', '--source=odoo.addons.runbot_merge,odoo.addons.forwardport', '--branch']
 
+    r, w = os.pipe2(os.O_NONBLOCK)
+    buf = bytearray()
+    def _move(inpt=r, output=sys.stdout.fileno()):
+        while p.poll() is None:
+            readable, _, _ = select.select([inpt], [], [], 1)
+            if readable:
+                r = os.read(inpt, 4096)
+                if not r:
+                    break
+                os.write(output, r)
+                buf.extend(r)
+        os.close(inpt)
+
     p = subprocess.Popen([
         *cov,
         'odoo', '--http-port', str(port),
@@ -425,25 +443,35 @@ def server(request, db, port, module, addons_path, tmpdir):
         '-d', db,
         '--max-cron-threads', '0', # disable cron threads (we're running crons by hand)
         *itertools.chain.from_iterable(('--log-handler', h) for h in log_handlers),
-    ], env={
+    ], stderr=w, env={
         **os.environ,
         # stop putting garbage in the user dirs, and potentially creating conflicts
         # TODO: way to override this with macOS?
         'XDG_DATA_HOME': str(tmpdir.mkdir('share')),
         'XDG_CACHE_HOME': str(tmpdir.mkdir('cache')),
     })
+    os.close(w)
+    # start the reader thread here so `_move` can read `p` without needing
+    # additional handholding
+    threading.Thread(target=_move, daemon=True).start()
 
     try:
         wait_for_server(db, port, p, module)
 
-        yield p
+        yield p, buf
     finally:
         p.terminate()
         p.wait(timeout=30)
 
 @pytest.fixture
-def env(port, server, db, default_crons):
+def env(request, port, server, db, default_crons):
     yield Environment(port, db, default_crons)
+    if request.node.get_closest_marker('expect_log_errors'):
+        if b"Traceback (most recent call last):" not in server[1]:
+            pytest.fail("should have found error in logs.")
+    else:
+        if b"Traceback (most recent call last):" in server[1]:
+            pytest.fail("unexpected error in logs, fix, or mark function as `expect_log_errors` to require.")
 
 def check(response):
     assert response.ok, response.text or response.reason

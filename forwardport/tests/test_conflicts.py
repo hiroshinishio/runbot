@@ -2,6 +2,8 @@ import re
 import time
 from operator import itemgetter
 
+import pytest
+
 from utils import make_basic, Commit, validate_all, matches, seen, REF_PATTERN, to_pr
 
 
@@ -296,6 +298,8 @@ def test_multiple_commits_same_authorship(env, config, make_repo):
     assert get(c.author) == get(author)
     assert get(c.committer) == get(committer)
 
+
+@pytest.mark.expect_log_errors(reason="commits with incomplete authorship are unmergeable, which is logged as error")
 def test_multiple_commits_different_authorship(env, config, make_repo, users, rolemap):
     """ When a PR has multiple commits by different authors, the resulting
     (squashed) conflict commit should have an empty email

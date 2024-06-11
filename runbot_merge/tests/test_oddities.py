@@ -1,3 +1,4 @@
+import pytest
 import requests
 
 from utils import Commit, to_pr
@@ -171,6 +172,8 @@ def test_merge_empty_commits(env, repo, users, config):
     assert commits[1]['commit']['message'].startswith('thing1')
     assert commits[2]['commit']['message'] == 'initial'
 
+
+@pytest.mark.expect_log_errors(reason="emptied commits are merge errors and logged")
 def test_merge_emptying_commits(env, repo, users, config):
     """The mergebot should *not* allow merging non-empty commits which become
     empty as part of the staging (rebasing)

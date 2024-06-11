@@ -396,6 +396,8 @@ def test_sub_match(env, project, repo_a, repo_b, repo_c, config):
     )
     assert s == list(st.ids)
 
+
+@pytest.mark.expect_log_errors(reason="merge errors are logged as errors")
 def test_merge_fail(env, project, repo_a, repo_b, users, config):
     """ In a matched-branch scenario, if merging in one of the linked repos
     fails it should revert the corresponding merges

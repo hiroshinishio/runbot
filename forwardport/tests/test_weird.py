@@ -853,6 +853,8 @@ def test_freeze(env, config, make_repo, users):
     assert env['runbot_merge.pull_requests'].search_count([('state', '=', 'merged')]) \
         == len(['release', 'initial', 'fw-b', 'fw-post-b', 'fw-c'])
 
+
+@pytest.mark.expect_log_errors(reason="missing / invalid head causes an error to be logged")
 def test_missing_magic_ref(env, config, make_repo):
     """There are cases where github fails to create / publish or fails to update
     the magic refs in refs/pull/*.

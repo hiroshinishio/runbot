@@ -56,6 +56,7 @@ def test_ignore(env, config, make_repo):
         "should not have created a forward port"
 
 
+@pytest.mark.expect_log_errors(reason="one of the limit-setting does not provide a branch name")
 def test_disable(env, config, make_repo, users):
     """ Checks behaviour if the limit target is disabled:
 
