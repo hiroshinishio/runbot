@@ -632,7 +632,7 @@ class PullRequests(models.Model):
             cmds: List[commands.Command] = [
                 ps
                 for line in commandlines
-                for ps in commands.Parser(line)
+                for ps in commands.Parser(line.rstrip())
             ]
         except Exception as e:
             _logger.info(
