@@ -270,7 +270,7 @@ def stage_batches(branch: Branch, batches: Batch, staging_state: StagingState) -
                 with contextlib.suppress(Exception):
                     reason = json.loads(str(reason))['message'].lower()
 
-                pr.state = 'error'
+                pr.error = True
                 env.ref('runbot_merge.pr.merge.failed')._send(
                     repository=pr.repository,
                     pull_request=pr.number,

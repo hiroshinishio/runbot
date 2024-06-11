@@ -2988,7 +2988,7 @@ class TestBatching(object):
             pr01 = self._pr(repo, 'Urgent1', [{'n': 'n'}, {'o': 'o'}], user=config['role_user']['token'], reviewer=None, statuses=[])
             pr01.post_comment('hansen NOW!', config['role_reviewer']['token'])
         p_01 = to_pr(env, pr01)
-        p_01.state = 'error'
+        p_01.error = True
 
         env.run_crons()
         assert not p_01.staging_id, "p_01 should not be picked up as it's failed"

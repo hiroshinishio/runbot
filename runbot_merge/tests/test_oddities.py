@@ -211,16 +211,22 @@ def test_merge_emptying_commits(env, repo, users, config):
 
     ping = f"@{users['user']} @{users['reviewer']}"
     # check that first / sole commit emptying is caught
-    assert not to_pr(env, pr1).staging_id
+    pr1_id = to_pr(env, pr1)
+    assert not pr1_id.staging_id
     assert pr1.comments[3:] == [
         (users['user'], f"{ping} unable to stage: commit {c1} results in an empty tree when merged, it is likely a duplicate of a merged commit, rebase and remove.")
     ]
+    assert pr1_id.error
+    assert pr1_id.state == 'error'
 
     # check that followup commit emptying is caught
-    assert not to_pr(env, pr2).staging_id
+    pr2_id = to_pr(env, pr2)
+    assert not pr2_id.staging_id
     assert pr2.comments[3:] == [
         (users['user'], f"{ping} unable to stage: commit {c2} results in an empty tree when merged, it is likely a duplicate of a merged commit, rebase and remove.")
     ]
+    assert pr2_id.error
+    assert pr2_id.state == 'error'
 
     # check that emptied squashed pr is caught
     pr3_id = to_pr(env, pr3)
@@ -228,6 +234,17 @@ def test_merge_emptying_commits(env, repo, users, config):
     assert pr3.comments[3:] == [
         (users['user'], f"{ping} unable to stage: results in an empty tree when merged, might be the duplicate of a merged PR.")
     ]
+    assert pr3_id.error
+    assert pr3_id.state == 'error'
+
+    # ensure the PR does not get re-staged since it's the first of the staging
+    # (it's the only one)
+    env.run_crons()
+    assert pr1.comments[3:] == [
+        (users['user'], f"{ping} unable to stage: commit {c1} results in an empty tree when merged, it is likely a duplicate of a merged commit, rebase and remove.")
+    ]
+    assert len(pr2.comments) == 4
+    assert len(pr3.comments) == 4
 
 def test_force_ready(env, repo, config):
     with repo:
@@ -238,7 +255,7 @@ def test_force_ready(env, repo, config):
     env.run_crons()
 
     pr_id = to_pr(env, pr)
-    pr_id.state = 'ready'
+    pr_id.skipchecks = True
 
     assert pr_id.state == 'ready'
     assert pr_id.status == 'pending'

@@ -22,7 +22,7 @@ from odoo.exceptions import AccessError
 from odoo.osv import expression
 from odoo.tools import html_escape, Reverse
 from . import commands
-from .utils import enum
+from .utils import enum, readonly
 
 from .. import github, exceptions, controllers, utils
 
@@ -328,11 +328,11 @@ class PullRequests(models.Model):
 
     closed = fields.Boolean(default=False, tracking=True)
     error = fields.Boolean(string="in error", default=False, tracking=True)
-    skipchecks = fields.Boolean(related='batch_id.skipchecks')
+    skipchecks = fields.Boolean(related='batch_id.skipchecks', inverse='_inverse_skipchecks')
     cancel_staging = fields.Boolean(related='batch_id.cancel_staging')
     merge_date = fields.Datetime(
         related='batch_id.merge_date',
-        inverse=lambda _: 1/0,
+        inverse=readonly,
         tracking=True,
         store=True,
     )
@@ -347,8 +347,13 @@ class PullRequests(models.Model):
         ('merged', 'Merged'),
         ('error', 'Error'),
     ],
-        compute='_compute_state', store=True, default='opened',
-        index=True, tracking=True, column_type=enum(_name, 'state'),
+        compute='_compute_state',
+        inverse=readonly,
+        readonly=True,
+        store=True,
+        index=True,
+        tracking=True,
+        column_type=enum(_name, 'state'),
     )
 
     number = fields.Integer(required=True, index=True, group_operator=None)
@@ -376,7 +381,7 @@ class PullRequests(models.Model):
 
     reviewed_by = fields.Many2one('res.partner', index=True, tracking=True)
     delegates = fields.Many2many('res.partner', help="Delegate reviewers, not intrinsically reviewers but can review this PR")
-    priority = fields.Selection(related="batch_id.priority", inverse=lambda _: 1 / 0)
+    priority = fields.Selection(related="batch_id.priority", inverse=readonly)
 
     overrides = fields.Char(required=True, default='{}', tracking=True)
     statuses = fields.Text(help="Copy of the statuses from the HEAD commit, as a Python literal", default="{}")
@@ -389,12 +394,12 @@ class PullRequests(models.Model):
         ('pending', 'Pending'),
         ('failure', 'Failure'),
         ('success', 'Success'),
-    ], compute='_compute_statuses', store=True, column_type=enum(_name, 'status'))
+    ], compute='_compute_statuses', store=True, inverse=readonly, column_type=enum(_name, 'status'))
     previous_failure = fields.Char(default='{}')
 
     batch_id = fields.Many2one('runbot_merge.batch', index=True)
-    staging_id = fields.Many2one('runbot_merge.stagings', compute='_compute_staging', store=True)
-    staging_ids = fields.Many2many('runbot_merge.stagings', string="Stagings", compute='_compute_stagings', context={"active_test": False})
+    staging_id = fields.Many2one('runbot_merge.stagings', compute='_compute_staging', inverse=readonly, store=True)
+    staging_ids = fields.Many2many('runbot_merge.stagings', string="Stagings", compute='_compute_stagings', inverse=readonly, context={"active_test": False})
 
     @api.depends('batch_id.batch_staging_ids.runbot_merge_stagings_id.active')
     def _compute_staging(self):
@@ -485,6 +490,12 @@ class PullRequests(models.Model):
     @api.depends('repository.name', 'number', 'message')
     def _compute_display_name(self):
         return super()._compute_display_name()
+
+    def _inverse_skipchecks(self):
+        for p in self:
+            p.batch_id.skipchecks = p.skipchecks
+            if p.skipchecks:
+                p.reviewed_by = self.env.user.partner_id
 
     def name_get(self):
         name_template = '%(repo_name)s#%(number)d'
