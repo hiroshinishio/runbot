@@ -1,5 +1,5 @@
-
 import pytest
+import requests
 
 from utils import seen, Commit, make_basic, to_pr
 
@@ -9,28 +9,41 @@ from utils import seen, Commit, make_basic, to_pr
     pytest.param('b', 'b', 0, id='current'),
     pytest.param('b', 'a', 0, id='earlier'),
 ])
-def test_configure_fp_limit(env, config, make_repo, source, limit, count):
-    prod, other = make_basic(env, config, make_repo)
+def test_configure_fp_limit(env, config, make_repo, source, limit, count, port):
+    prod, other = make_basic(env, config, make_repo, statuses="default")
     with prod:
         [c] = prod.make_commits(
             source, Commit('c', tree={'f': 'g'}),
             ref='heads/branch',
         )
         pr = prod.make_pr(target=source, head='branch')
-        prod.post_status(c, 'success', 'legal/cla')
-        prod.post_status(c, 'success', 'ci/runbot')
+        prod.post_status(c, 'success')
         pr.post_comment(f'hansen r+ up to {limit}', config['role_reviewer']['token'])
     env.run_crons()
     with prod:
-        prod.post_status(f'staging.{source}', 'success', 'legal/cla')
-        prod.post_status(f'staging.{source}', 'success', 'ci/runbot')
+        prod.post_status(f'staging.{source}', 'success')
     env.run_crons()
 
+    pr_id = to_pr(env, pr)
     descendants = env['runbot_merge.pull_requests'].search([
-        ('source_id', '=', to_pr(env, pr).id)
+        ('source_id', '=', pr_id.id)
     ])
     assert len(descendants) == count
+    limit_id = env['runbot_merge.branch'].search([('name', '=', limit)])
 
+    assert pr_id.limit_id == limit_id
+    assert not descendants.limit_id, "descendant should not inherit the limit explicitly"
+
+    # check that the basic thingie works
+    r = requests.get(f'http://localhost:{port}/{prod.name}/pull/{pr.number}.png')
+    assert r.ok, r.text
+
+    if descendants:
+        c = env['runbot_merge.branch'].search([('name', '=', 'c')])
+        descendants.limit_id = c.id
+
+        r = requests.get(f'http://localhost:{port}/{prod.name}/pull/{pr.number}.png')
+        assert r.ok
 
 def test_ignore(env, config, make_repo):
     """ Provide an "ignore" command which is equivalent to setting the limit

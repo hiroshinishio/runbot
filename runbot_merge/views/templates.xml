@@ -462,10 +462,12 @@ elif all(p.state in ('merged', 'closed') for p in genealogy[-1].all_prs):
 else:
     # if the tip of the genealogy is not closed, extend to the furthest limit,
     # keeping branches which are active or have an associated batch / PR
-    limit = genealogy.prs.limit_id.sorted(lambda b: (b.sequence, b.name))
+    limit = min(genealogy.prs.limit_id, key=lambda b: (b.sequence, b.name), default=None)
     limit_high = project.branch_ids.ids.index(limit.id) if limit else None
-    limit = targets.sorted(lambda b: (b.sequence, b.name))[-1]
+
+    limit = max(targets, key=lambda b: (b.sequence, b.name))
     limit_low = project.branch_ids.ids.index(limit.id)
+
     branches = project.branch_ids[limit_high:limit_low+1].filtered(lambda b: b.active or b in targets)[::-1]
 
 action = (project, repos, branches, genealogy)
