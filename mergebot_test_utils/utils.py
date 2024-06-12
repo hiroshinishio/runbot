@@ -158,6 +158,7 @@ def make_basic(
         'name': prod.name,
         'required_statuses': statuses,
         'fp_remote_target': other.name if other else False,
+        'group_id': False,
     })
     env['res.partner'].search([
         ('github_login', '=', config['role_reviewer']['user'])
