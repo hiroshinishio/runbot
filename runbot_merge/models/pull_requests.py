@@ -323,7 +323,9 @@ class PullRequests(models.Model):
     display_name: str
 
     target = fields.Many2one('runbot_merge.branch', required=True, index=True, tracking=True)
+    target_sequence = fields.Integer(related='target.sequence')
     repository = fields.Many2one('runbot_merge.repository', required=True)
+    project = fields.Many2one(related='repository.project_id')
     # NB: check that target & repo have same project & provide project related?
 
     closed = fields.Boolean(default=False, tracking=True)
