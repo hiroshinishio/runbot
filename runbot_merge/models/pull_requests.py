@@ -812,7 +812,24 @@ class PullRequests(models.Model):
                 case commands.Close() if source_author:
                     feedback(close=True)
                 case commands.FW():
-                    if source_reviewer or is_reviewer:
+                    if command == commands.FW.NO:
+                        if is_author:
+                            for p in self.batch_id.prs:
+                                ping, m = p._maybe_update_limit(self.target.name)
+
+                                if ping and p == self:
+                                    msg = m
+                                else:
+                                    if ping:
+                                        m = f"@{login} {m}"
+                                    self.env['runbot_merge.pull_requests.feedback'].create({
+                                        'repository': p.repository.id,
+                                        'pull_request': p.number,
+                                        'message': m,
+                                    })
+                        else:
+                            msg = "you can't set a forward-port limit."
+                    elif source_reviewer or is_reviewer:
                         (self.source_id or self).batch_id.fw_policy = command.name.lower()
                         match command:
                             case commands.FW.DEFAULT:
@@ -825,6 +842,8 @@ class PullRequests(models.Model):
                     else:
                         msg = "you can't configure forward-port CI."
                 case commands.Limit(branch) if is_author:
+                    if branch is None:
+                        feedback(message="'ignore' is deprecated, use 'fw=no' to disable forward porting.")
                     limit = branch or self.target.name
                     for p in self.batch_id.prs:
                         ping, m = p._maybe_update_limit(limit)

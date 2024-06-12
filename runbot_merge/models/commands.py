@@ -137,6 +137,7 @@ class SkipChecks:
 
 class FW(enum.Enum):
     DEFAULT = enum.auto()
+    NO = enum.auto()
     SKIPCI = enum.auto()
     SKIPMERGE = enum.auto()
 

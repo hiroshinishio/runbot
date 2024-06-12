@@ -45,29 +45,39 @@ def test_configure_fp_limit(env, config, make_repo, source, limit, count, port):
         r = requests.get(f'http://localhost:{port}/{prod.name}/pull/{pr.number}.png')
         assert r.ok
 
-def test_ignore(env, config, make_repo):
+def test_ignore(env, config, make_repo, users):
     """ Provide an "ignore" command which is equivalent to setting the limit
     to target
     """
-    prod, other = make_basic(env, config, make_repo)
+    prod, _ = make_basic(env, config, make_repo, statuses="default")
     branch_a = env['runbot_merge.branch'].search([('name', '=', 'a')])
     with prod:
         [c] = prod.make_commits('a', Commit('c', tree={'0': '0'}), ref='heads/mybranch')
         pr = prod.make_pr(target='a', head='mybranch')
-        prod.post_status(c, 'success', 'legal/cla')
-        prod.post_status(c, 'success', 'ci/runbot')
-        pr.post_comment('hansen r+ ignore', config['role_reviewer']['token'])
+        prod.post_status(c, 'success')
+    env.run_crons()
+    with prod:
+        pr.post_comment('hansen ignore', config['role_reviewer']['token'])
+        pr.post_comment('hansen r+ fw=no', config['role_reviewer']['token'])
     env.run_crons()
     pr_id = env['runbot_merge.pull_requests'].search([('number', '=', pr.number)])
     assert pr_id.limit_id == branch_a
 
     with prod:
-        prod.post_status('staging.a', 'success', 'legal/cla')
-        prod.post_status('staging.a', 'success', 'ci/runbot')
+        prod.post_status('staging.a', 'success')
+    env.run_crons()
 
     assert env['runbot_merge.pull_requests'].search([]) == pr_id,\
         "should not have created a forward port"
 
+    assert pr.comments == [
+        seen(env, pr, users),
+        (users['reviewer'], "hansen ignore"),
+        (users['reviewer'], "hansen r+ fw=no"),
+        (users['user'], "'ignore' is deprecated, use 'fw=no' to disable forward porting."),
+        (users['user'], "Forward-port disabled."),
+        (users['user'], "Forward-port disabled."),
+    ]
 
 @pytest.mark.expect_log_errors(reason="one of the limit-setting does not provide a branch name")
 def test_disable(env, config, make_repo, users):
