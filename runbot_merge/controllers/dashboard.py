@@ -7,6 +7,7 @@ import colorsys
 import hashlib
 import io
 import json
+import logging
 import math
 import pathlib
 from email.utils import formatdate
@@ -21,6 +22,9 @@ from PIL import Image, ImageDraw, ImageFont
 
 from odoo.http import Controller, route, request
 from odoo.tools import file_open
+
+
+_logger = logging.getLogger(__name__)
 
 LIMIT = 20
 class MergebotDashboard(Controller):
@@ -101,6 +105,12 @@ class MergebotDashboard(Controller):
         if not pr_id:
             raise werkzeug.exceptions.NotFound()
         if not pr_id.repository.group_id <= request.env.user.groups_id:
+            _logger.warning(
+                "Access error: %s (%s) tried to access %s but lacks access",
+                request.env.user.login,
+                request.env.user.name,
+                pr_id.display_name,
+            )
             raise werkzeug.exceptions.NotFound()
 
         if png:
