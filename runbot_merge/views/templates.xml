@@ -594,8 +594,8 @@ action = batches
                                    t-attf-class="fa fa-external-link"
                                    t-att-href="p['backend_url']"
                                 />
-                                <sup t-if="not p['checked']" class="text-danger">unchecked</sup>
-                                <sup t-if="not p['reviewed']" class="text-danger">unreviewed</sup>
+                                <sup t-if="not p['checked']" class="text-danger">missing statuses</sup>
+                                <sup t-if="not p['reviewed']" class="text-danger">missing r+</sup>
                                 <sup t-if="not p['attached']"
                                      t-attf-title="detached: {{p['pr'].detach_reason}}"
                                      class="text-warning fa fa-unlink"/>

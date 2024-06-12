@@ -173,7 +173,7 @@ def raster_render(pr):
     with file_open('web/static/fonts/google/Open_Sans/Open_Sans-Regular.ttf', 'rb') as f:
         font = ImageFont.truetype(f, size=16, layout_engine=0)
         f.seek(0)
-        supfont = ImageFont.truetype(f, size=10, layout_engine=0)
+        supfont = ImageFont.truetype(f, size=13, layout_engine=0)
     with file_open('web/static/fonts/google/Open_Sans/Open_Sans-Bold.ttf', 'rb') as f:
         bold = ImageFont.truetype(f, size=16, layout_engine=0)
 
@@ -203,9 +203,9 @@ def raster_render(pr):
         # technically label (state + blocked) does not actually impact image
         # render (though subcomponents of state do) however blocked is useful
         # to force an etag miss so keeping it
-        # TODO: blocked includes draft & merge method, maybe should change looks?
+
         etag.update(''.join(
-            f"(PS){p['label']},{p['closed']},{p['number']},{p['checked']},{p['reviewed']},{p['attached']}"
+            f"(PS){p['label']},{p['closed']},{p['number']},{p['checked']},{p['reviewed']},{p['attached']},{p['pr'].staging_id.id}"
             for p in ps['prs']
         ).encode())
 
@@ -214,9 +214,10 @@ def raster_render(pr):
             _, _, ww, hh = font.getbbox(f" #{p['number']}")
             w += ww + supfont.getbbox(' '.join(filter(None, [
                 'error' if p['pr'].error else '',
-                '' if p['checked'] else 'unchecked',
-                '' if p['reviewed'] else 'unreviewed',
+                '' if p['checked'] else 'missing statuses',
+                '' if p['reviewed'] else 'missing r+',
                 '' if p['attached'] else 'detached',
+                'staged' if p['pr'].staging_id else 'ready' if p['pr']._ready else '',
             ])))[2]
             h = max(hh, h)
         rows[b] = max(rows.get(b, 0), h)
@@ -294,8 +295,8 @@ def raster_render(pr):
                 draw.line([(left, bottom-h), (left+w, bottom-h)], fill=ERROR)
             for attribute in filter(None, [
                 'error' if p['pr'].error else '',
-                '' if p['checked'] else 'unchecked',
-                '' if p['reviewed'] else 'unreviewed',
+                '' if p['checked'] else 'missing statuses',
+                '' if p['reviewed'] else 'missing r+',
                 '' if p['attached'] else 'detached',
                 'staged' if p['pr'].staging_id else 'ready' if p['pr']._ready else ''
             ]):
