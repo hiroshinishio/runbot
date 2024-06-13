@@ -777,6 +777,9 @@ class PullRequests(models.Model):
                 case commands.SkipChecks() if is_admin:
                     self.batch_id.skipchecks = True
                     self.reviewed_by = author
+                    if not (self.squash or self.merge_method):
+                        self.env.ref('runbot_merge.check_linked_prs_status')._trigger()
+
                     for p in self.batch_id.prs - self:
                         if not p.reviewed_by:
                             p.reviewed_by = author
@@ -999,13 +1002,12 @@ class PullRequests(models.Model):
     def _approve(self, author, login):
         oldstate = self.state
         newstate = RPLUS.get(self.state)
-        msg = None
         if not author.email:
-            msg = "I must know your email before you can review PRs. Please contact an administrator."
+            return "I must know your email before you can review PRs. Please contact an administrator."
         elif not newstate:
-            msg = "this PR is already reviewed, reviewing it again is useless."
-        else:
-            self.reviewed_by = author
+            return "this PR is already reviewed, reviewing it again is useless."
+
+        self.reviewed_by = author
         _logger.debug(
             "r+ on %s by %s (%s->%s) status=%s message? %s",
             self.display_name, author.github_login,
@@ -1020,7 +1022,9 @@ class PullRequests(models.Model):
                 pull_request=self.number,
                 format_args={'user': login, 'pr': self},
             )
-        return msg
+        if not (self.squash or self.merge_method):
+            self.env.ref('runbot_merge.check_linked_prs_status')._trigger()
+        return None
 
     def message_post(self, **kw):
         if author := self.env.cr.precommit.data.get('change-author'):
@@ -1362,7 +1366,8 @@ class PullRequests(models.Model):
             if pair[0] != 'squash'
         )
         for r in self.search([
-            ('state', '=', 'ready'),
+            ('state', 'in', ("approved", "ready")),
+            ('staging_id', '=', False),
             ('squash', '=', False),
             ('merge_method', '=', False),
             ('method_warned', '=', False),

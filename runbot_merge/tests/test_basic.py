@@ -1050,7 +1050,7 @@ def test_ci_failure_after_review(env, repo, users, config):
     """
     with repo:
         prx = _simple_init(repo)
-        prx.post_comment('hansen r+', config['role_reviewer']['token'])
+        prx.post_comment('hansen r+ rebase-ff', config['role_reviewer']['token'])
     env.run_crons()
 
     for ctx, url in [
@@ -1066,8 +1066,9 @@ def test_ci_failure_after_review(env, repo, users, config):
         env.run_crons()
 
     assert prx.comments == [
-        (users['reviewer'], 'hansen r+'),
+        (users['reviewer'], 'hansen r+ rebase-ff'),
         seen(env, prx, users),
+        (users['user'], "Merge method set to rebase and fast-forward."),
         (users['user'], "@{user} @{reviewer} 'ci/runbot' failed on this reviewed PR.".format_map(users)),
         (users['user'], "@{user} @{reviewer} 'legal/cla' failed on this reviewed PR.".format_map(users)),
         (users['user'], "@{user} @{reviewer} 'legal/cla' failed on this reviewed PR.".format_map(users)),
@@ -1302,14 +1303,15 @@ class TestRetry:
         """
         with repo:
             prx = _simple_init(repo)
-            prx.post_comment('hansen r+', config['role_reviewer']['token'])
+            prx.post_comment('hansen r+ rebase-ff', config['role_reviewer']['token'])
             prx.post_comment('hansen retry', config['role_reviewer']['token'])
         env.run_crons()
 
         assert prx.comments == [
-            (users['reviewer'], 'hansen r+'),
+            (users['reviewer'], 'hansen r+ rebase-ff'),
             (users['reviewer'], 'hansen retry'),
             seen(env, prx, users),
+            (users['user'], "Merge method set to rebase and fast-forward."),
             (users['user'], "@{reviewer} retry makes no sense when the PR is not in error.".format_map(users)),
         ]
 
