@@ -427,7 +427,7 @@ class Batch(models.Model):
             if not (batch.parent_id and all(p.parent_id for p in batch.prs)):
                 _logger.info('-> no parent %s (%s)', batch, prs)
                 continue
-            if not self.env.context.get('force_fw') and self.source.fw_policy != 'skipci' \
+            if not self.env.context.get('force_fw') and batch.source.fw_policy != 'skipci' \
                     and (invalid := batch.prs.filtered(lambda p: p.state not in ['validated', 'ready'])):
                 _logger.info(
                     '-> wrong state %s (%s)',
@@ -437,7 +437,7 @@ class Batch(models.Model):
                 continue
 
             # check if we've already forward-ported this branch
-            next_target = self._find_next_targets()
+            next_target = batch._find_next_targets()
             if not next_target:
                 _logger.info("-> forward port done (no next target)")
                 continue
