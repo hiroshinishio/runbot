@@ -1810,7 +1810,7 @@ class Commit(models.Model):
     def _compute_prs(self):
         for c in self:
             c.pull_requests = self.env['runbot_merge.pull_requests'].search([
-                ('head', '=', self.sha),
+                ('head', '=', c.sha),
             ])
 
 
