@@ -430,7 +430,7 @@
                     </a>
                     <a t-attf-href="/web#view_type=form&amp;model=runbot_merge.pull_requests&amp;id={{pr.id}}"
                         class="btn btn-sm btn-secondary align-top float-right"
-                        groups="base.group_user">View in backend</a>
+                        groups="runbot_merge.group_admin">View in backend</a>
                 </h1>
                 <h6>Created by <span t-field="pr.author.display_name"/></h6>
                 <t t-set="tmpl">
@@ -597,7 +597,7 @@ action = batches
                                    title="Open on Github"
                                    t-att-href="p['github_url']"
                                 />
-                                <a groups="base.group_user"
+                                <a groups="runbot_merge.group_admin"
                                    title="Open in Backend"
                                    t-attf-class="fa fa-external-link"
                                    t-att-href="p['backend_url']"
