@@ -7,11 +7,19 @@
     <template id="link-pr" name="create a link to `pr`">
         <t t-set="title">
             <t t-if="pr.repository.group_id &lt;= env.user.groups_id">
-                <t t-esc="pr.message.split('\n')[0]"/>
+                <t t-out="pr.message.split('\n', 1)[0]"/>
             </t>
         </t>
+        <t t-set="title">
+          <t t-if="title.strip() and pr.blocked" >
+            <t t-out="title.strip()"/>: <t t-out="pr.blocked"/>
+          </t>
+          <t t-else="">
+            <t t-out="pr.blocked or title.strip()"/>
+          </t>
+        </t>
         <a t-attf-href="https://github.com/{{ pr.repository.name }}/pull/{{ pr.number }}"
-           t-att-title="pr.blocked or title.strip()"
+           t-att-title="title"
            t-att-target="target or None"
            t-att-class="classes or None"
         ><t t-esc="pr.display_name"/></a>
