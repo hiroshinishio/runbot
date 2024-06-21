@@ -160,6 +160,14 @@ def rolemap(request, config):
 
 @pytest.fixture
 def partners(env, config, rolemap):
+    """This specifically does not create partners for ``user`` and ``other``
+    so they can be generated on-interaction, as "external" users.
+
+    The two differ in that ``user`` has ownership of the org and can manage
+    repos there, ``other`` is completely unrelated to anything so useful to
+    check for interaction where the author only has read access to the reference
+    repositories.
+    """
     m = {}
     for role, u in rolemap.items():
         if role in ('user', 'other'):

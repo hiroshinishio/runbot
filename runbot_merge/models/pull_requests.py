@@ -1049,6 +1049,13 @@ class PullRequests(models.Model):
             kw['body'] = html_escape(message)
         return super()._message_log(**kw)
 
+    def _message_log_batch(self, **kw):
+        if author := self.env.cr.precommit.data.get('change-author'):
+            kw['author_id'] = author
+        if message := self.env.cr.precommit.data.get('change-message'):
+            kw['bodies'] = {p.id: html_escape(message) for p in self}
+        return super()._message_log_batch(**kw)
+
     def _pr_acl(self, user):
         if not self:
             return ACL(False, False, False)

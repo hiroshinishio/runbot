@@ -254,6 +254,11 @@ def handle_pr(env, event):
         headers.get('X-Github-Delivery'),
         headers.get('User-Agent'),
      )
+    sender = env['res.partner'].search([('github_login', '=', event['sender']['login'])], limit=1)
+    if not sender:
+        sender = env['res.partner'].create({'name': event['sender']['login'], 'github_login': event['sender']['login']})
+    env.cr.precommit.data['change-author'] = sender.id
+
     if event['action'] == 'opened':
         author_name = pr['user']['login']
         author = env['res.partner'].search([('github_login', '=', author_name)], limit=1)

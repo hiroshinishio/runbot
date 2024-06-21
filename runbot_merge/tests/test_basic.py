@@ -65,6 +65,13 @@ def test_trivial_flow(env, repo, page, users, config):
         )
         pr = repo.make_pr(title="gibberish", body="blahblah", target='master', head='other')
 
+        [c2] = repo.make_commits(
+            'other',
+            Commit('forgot a bit', tree={'whee': 'kjfdsh'}),
+            ref='heads/other',
+            make=False,
+        )
+
     pr_id = to_pr(env, pr)
     assert pr_id.state == 'opened'
     env.run_crons()
@@ -79,12 +86,12 @@ def test_trivial_flow(env, repo, page, users, config):
         [e.text_content() for e in pr_dashboard.cssselect('dl.runbot-merge-fields dd')],
     )) == {
         'label': f"{config['github']['owner']}:other",
-        'head': c1,
+        'head': c2,
     }
 
     with repo:
-        repo.post_status(c1, 'success', 'legal/cla')
-        repo.post_status(c1, 'success', 'ci/runbot')
+        repo.post_status(c2, 'success', 'legal/cla')
+        repo.post_status(c2, 'success', 'ci/runbot')
     env.run_crons()
     assert pr_id.state == 'validated'
 
@@ -140,6 +147,7 @@ def test_trivial_flow(env, repo, page, users, config):
     assert repo.read_tree(master) == {
         'a': 'some other content',
         'b': 'a second file',
+        'whee': 'kjfdsh',
     }
     assert master.message == "gibberish\n\nblahblah\n\ncloses {repo.name}#1"\
                              "\n\nSigned-off-by: {reviewer.formatted_email}"\
@@ -156,8 +164,9 @@ def test_trivial_flow(env, repo, page, users, config):
     ])
 
     assert list(messages) == [
-        ('OdooBot', '<p>Pull Request created</p>', []),
-        ('OdooBot', f'<p>statuses changed on {c1}</p>', [('Opened', 'Validated')]),
+        (users['user'], '<p>Pull Request created</p>', []),
+        (users['user'], '', [(c1, c2)]),
+        ('OdooBot', f'<p>statuses changed on {c2}</p>', [('Opened', 'Validated')]),
         # reviewer approved changing the state and setting reviewer as reviewer
         # plus set merge method
         ('Reviewer', '', [
