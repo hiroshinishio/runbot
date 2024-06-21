@@ -1168,6 +1168,14 @@ class PullRequests(models.Model):
                 pull_request=self.number,
                 format_args={'pr': self, 'status': ci}
             )
+        elif self.state == 'opened' and self.parent_id:
+            # only care about FP PRs which are not approved / staged / merged yet
+            self.env.ref('runbot_merge.forwardport.ci.failed')._send(
+                repository=self.repository,
+                pull_request=self.number,
+                token_field='fp_github_token',
+                format_args={'pr': self, 'ci': ci},
+            )
 
     def _auto_init(self):
         for field in self._fields.values():

@@ -1042,38 +1042,6 @@ def test_rebase_failure(env, repo, users, config):
         'b': 'b',
     }
 
-def test_ci_failure_after_review(env, repo, users, config):
-    """ If a PR is r+'d but the CI ends up failing afterwards, ping the user
-    so they're aware. This is useful for the more "fire and forget" approach
-    especially small / simple PRs where you assume they're going to pass and
-    just r+ immediately.
-    """
-    with repo:
-        prx = _simple_init(repo)
-        prx.post_comment('hansen r+ rebase-ff', config['role_reviewer']['token'])
-    env.run_crons()
-
-    for ctx, url in [
-        ('ci/runbot', 'https://a'),
-        ('ci/runbot', 'https://a'),
-        ('legal/cla', 'https://b'),
-        ('foo/bar', 'https://c'),
-        ('ci/runbot', 'https://a'),
-        ('legal/cla', 'https://d'), # url changes so different from the previous
-    ]:
-        with repo:
-            repo.post_status(prx.head, 'failure', ctx, target_url=url)
-        env.run_crons()
-
-    assert prx.comments == [
-        (users['reviewer'], 'hansen r+ rebase-ff'),
-        seen(env, prx, users),
-        (users['user'], "Merge method set to rebase and fast-forward."),
-        (users['user'], "@{user} @{reviewer} 'ci/runbot' failed on this reviewed PR.".format_map(users)),
-        (users['user'], "@{user} @{reviewer} 'legal/cla' failed on this reviewed PR.".format_map(users)),
-        (users['user'], "@{user} @{reviewer} 'legal/cla' failed on this reviewed PR.".format_map(users)),
-    ]
-
 def test_reopen_merged_pr(env, repo, config, users):
     """ Reopening a *merged* PR should cause us to immediately close it again,
     and insult whoever did it
@@ -3902,28 +3870,34 @@ class TestFeedback:
     def test_ci_approved(self, repo, env, users, config):
         """CI failing on an r+'d PR sends feedback"""
         with repo:
-            m = repo.make_commit(None, 'initial', None, tree={'m': 'm'})
-            repo.make_ref('heads/master', m)
+            [m] = repo.make_commits(None, Commit('initial', tree={'m': 'm'}), ref="heads/master")
 
-            c1 = repo.make_commit(m, 'first', None, tree={'m': 'c1'})
-            prx = repo.make_pr(title='title', body='body', target='master', head=c1)
-        pr = env['runbot_merge.pull_requests'].search([
-            ('repository.name', '=', repo.name),
-            ('number', '=', prx.number)
-        ])
-
-        with repo:
-            prx.post_comment('hansen r+', config['role_reviewer']['token'])
-        assert pr.state == 'approved'
-
-        with repo:
-            repo.post_status(prx.head, 'failure', 'ci/runbot')
+            [c1] = repo.make_commits(m, Commit('first', tree={'m': 'c1'}))
+            pr = repo.make_pr(title='title', body='body', target='master', head=c1)
+            pr.post_comment('hansen r+', config['role_reviewer']['token'])
         env.run_crons()
 
-        assert prx.comments == [
+        pr_id = to_pr(env, pr)
+        assert pr_id.state == 'approved'
+
+        for ctx, url in [
+            ('ci/runbot', 'https://a'),
+            ('ci/runbot', 'https://a'),
+            ('legal/cla', 'https://b'),
+            ('foo/bar', 'https://c'),
+            ('ci/runbot', 'https://a'),
+            ('legal/cla', 'https://d'),  # url changes so different from the previous
+        ]:
+            with repo:
+                repo.post_status(pr_id.head, 'failure', ctx, target_url=url)
+            env.run_crons()
+
+        assert pr.comments == [
             (users['reviewer'], 'hansen r+'),
-            seen(env, prx, users),
-            (users['user'], "@%(user)s @%(reviewer)s 'ci/runbot' failed on this reviewed PR." % users)
+            seen(env, pr, users),
+            (users['user'], "@{user} @{reviewer} 'ci/runbot' failed on this reviewed PR.".format_map(users)),
+            (users['user'], "@{user} @{reviewer} 'legal/cla' failed on this reviewed PR.".format_map(users)),
+            (users['user'], "@{user} @{reviewer} 'legal/cla' failed on this reviewed PR.".format_map(users)),
         ]
 
     def test_review_failed(self, repo, env, users, config):

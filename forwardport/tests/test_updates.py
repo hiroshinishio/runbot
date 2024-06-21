@@ -33,11 +33,22 @@ def test_update_pr(env, config, make_repo, users, merge_parent) -> None:
             ref='heads/hugechange'
         )
         pr = prod.make_pr(target='a', head='hugechange')
-        prod.post_status(p_1, 'success', 'legal/cla')
-        prod.post_status(p_1, 'success', 'ci/runbot')
         pr.post_comment('hansen r+', config['role_reviewer']['token'])
 
+        prod.post_status(p_1, 'success', 'legal/cla')
+        prod.post_status(p_1, 'failure', 'ci/runbot')
     env.run_crons()
+
+    assert pr.comments == [
+        (users['reviewer'], 'hansen r+'),
+        seen(env, pr, users),
+        (users['user'], "@{user} @{reviewer} 'ci/runbot' failed on this reviewed PR.".format_map(users)),
+    ]
+
+    with prod:
+        prod.post_status(p_1, 'success', 'ci/runbot')
+    env.run_crons()
+
     with prod:
         prod.post_status('staging.a', 'success', 'legal/cla')
         prod.post_status('staging.a', 'success', 'ci/runbot')
