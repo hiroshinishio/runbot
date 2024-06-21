@@ -262,25 +262,6 @@ class PullRequests(models.Model):
                     )
         return r
 
-    def _try_closing(self, by):
-        r = super()._try_closing(by)
-        if r:
-            self.with_context(forwardport_detach_warn=False).write({
-                'parent_id': False,
-                'detach_reason': f"Closed by {by}",
-            })
-            self.search([('parent_id', '=', self.id)]).write({
-                'parent_id': False,
-                'detach_reason': f"{by} closed parent PR {self.display_name}",
-            })
-        return r
-
-
-    def _validate(self, statuses):
-        failed = super()._validate(statuses)
-        self.batch_id._schedule_fp_followup()
-        return failed
-
     def _commits_lazy(self):
         s = requests.Session()
         s.headers['Authorization'] = 'token %s' % self.repository.project_id.fp_github_token

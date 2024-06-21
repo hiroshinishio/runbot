@@ -1067,6 +1067,7 @@ class PullRequests(models.Model):
                     status = statuses.get(ci) or {'state': 'pending'}
                     if status['state'] in ('error', 'failure'):
                         pr._notify_ci_new_failure(ci, status)
+        self.batch_id._schedule_fp_followup()
 
     def modified(self, fnames, create=False, before=False):
         """ By default, Odoo can't express recursive *dependencies* which is
@@ -1443,12 +1444,20 @@ class PullRequests(models.Model):
         WHERE id = %s AND state != 'merged' AND state != 'closed'
         FOR UPDATE SKIP LOCKED;
         ''', [self.id])
-        r = self.env.cr.fetchone()
-        if not r:
+        if not self.env.cr.rowcount:
             return False
 
         self.unstage("closed by %s", by)
-        self.write({'closed': True, 'reviewed_by': False})
+        self.with_context(forwardport_detach_warn=False).write({
+            'closed': True,
+            'reviewed_by': False,
+            'parent_id': False,
+            'detach_reason': f"Closed by {by}",
+        })
+        self.search([('parent_id', '=', self.id)]).write({
+            'parent_id': False,
+            'detach_reason': f"{by} closed parent PR {self.display_name}",
+        })
 
         return True
 
