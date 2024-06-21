@@ -3105,7 +3105,7 @@ class TestReviewing:
             (users['user'], "I'm sorry, @{}. I'm afraid I can't do that.".format(users['other'])),
             (users['reviewer'], 'hansen r+'),
             (users['reviewer'], 'hansen r+'),
-            (users['user'], "@{} this PR is already reviewed, reviewing it again is useless.".format(
+            (users['user'], "This PR is already reviewed, reviewing it again is useless.".format(
                  users['reviewer'])),
         ]
 
@@ -3613,8 +3613,8 @@ class TestRecognizeCommands:
             (users['reviewer'], "hansen do the thing"),
             (users['reviewer'], "hansen @bobby-b r+ :+1:"),
             seen(env, pr, users),
-            (users['user'], "@{reviewer} unknown command 'do'".format_map(users)),
-            (users['user'], "@{reviewer} unknown command '@bobby-b'".format_map(users)),
+            (users['user'], "@{reviewer} unknown command 'do'.\n\nFor your own safety I've ignored *everything in your entire comment*.".format_map(users)),
+            (users['user'], "@{reviewer} unknown command '@bobby-b'.\n\nFor your own safety I've ignored *everything in your entire comment*.".format_map(users)),
         ]
 
 class TestRMinus:

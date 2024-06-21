@@ -129,15 +129,15 @@ def test_disable(env, config, make_repo, users):
     # use a set because git webhooks delays might lead to mis-ordered
     # responses and we don't care that much
     assert set(pr.comments) == {
+        seen(env, pr, users),
         (users['reviewer'], "hansen r+ up to"),
-        (users['user'], "@{reviewer} please provide a branch to forward-port to.".format_map(users)),
+        (users['user'], "@{reviewer} please provide a branch to forward-port to.\n\nFor your own safety I've ignored *everything in your entire comment*.".format_map(users)),
         (users['reviewer'], "hansen up to b"),
         (users['user'], "@{reviewer} branch 'b' is disabled, it can't be used as a forward port target.".format_map(users)),
         (users['reviewer'], "hansen up to foo"),
         (users['user'], "@{reviewer} there is no branch 'foo', it can't be used as a forward port target.".format_map(users)),
         (users['reviewer'], "hansen up to c"),
         (users['user'], "Forward-porting to 'c'."),
-        seen(env, pr, users),
     }
 
 

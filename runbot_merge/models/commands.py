@@ -305,7 +305,7 @@ class Parser:
         if limit := next(self.it, None):
             return Limit(limit)
         else:
-            raise CommandError("please provide a branch to forward-port to.")
+            raise CommandError("please provide a branch to forward-port to")
 
     def parse_close(self) -> Close:
         return Close()
