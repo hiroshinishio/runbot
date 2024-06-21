@@ -1776,6 +1776,7 @@ class Commit(models.Model):
     commit_ids = fields.Many2many('runbot_merge.stagings', relation='runbot_merge_stagings_commits', column2='staging_id', column1='commit_id')
     pull_requests = fields.One2many('runbot_merge.pull_requests', compute='_compute_prs')
 
+    @api.model_create_single
     def create(self, values):
         values['to_check'] = True
         r = super(Commit, self).create(values)
