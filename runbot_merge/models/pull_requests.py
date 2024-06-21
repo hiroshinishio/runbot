@@ -1781,11 +1781,14 @@ class Commit(models.Model):
     def create(self, values):
         values['to_check'] = True
         r = super(Commit, self).create(values)
+        self.env.ref("runbot_merge.process_updated_commits")._trigger()
         return r
 
     def write(self, values):
         values.setdefault('to_check', True)
         r = super(Commit, self).write(values)
+        if values['to_check']:
+            self.env.ref("runbot_merge.process_updated_commits")._trigger()
         return r
 
     def _notify(self):
