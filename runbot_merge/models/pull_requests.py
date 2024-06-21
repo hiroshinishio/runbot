@@ -1058,7 +1058,7 @@ class PullRequests(models.Model):
         # could have two PRs (e.g. one open and one closed) at least
         # temporarily on the same head, or on the same head with different
         # targets
-        updateable = self.filtered(lambda p: p.state != 'merged')
+        updateable = self.filtered(lambda p: not p.merge_date)
         updateable.statuses = statuses
         for pr in updateable:
             if pr.status == "failure":
