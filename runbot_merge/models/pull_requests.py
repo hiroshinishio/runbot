@@ -335,6 +335,7 @@ class PullRequests(models.Model):
     merge_date = fields.Datetime(
         related='batch_id.merge_date',
         inverse=readonly,
+        readonly=True,
         tracking=True,
         store=True,
     )
@@ -383,7 +384,7 @@ class PullRequests(models.Model):
 
     reviewed_by = fields.Many2one('res.partner', index=True, tracking=True)
     delegates = fields.Many2many('res.partner', help="Delegate reviewers, not intrinsically reviewers but can review this PR")
-    priority = fields.Selection(related="batch_id.priority", inverse=readonly)
+    priority = fields.Selection(related="batch_id.priority", inverse=readonly, readonly=True)
 
     overrides = fields.Char(required=True, default='{}', tracking=True)
     statuses = fields.Text(help="Copy of the statuses from the HEAD commit, as a Python literal", default="{}")
@@ -396,12 +397,12 @@ class PullRequests(models.Model):
         ('pending', 'Pending'),
         ('failure', 'Failure'),
         ('success', 'Success'),
-    ], compute='_compute_statuses', store=True, inverse=readonly, column_type=enum(_name, 'status'))
+    ], compute='_compute_statuses', store=True, inverse=readonly, readonly=True, column_type=enum(_name, 'status'))
     previous_failure = fields.Char(default='{}')
 
     batch_id = fields.Many2one('runbot_merge.batch', index=True)
-    staging_id = fields.Many2one('runbot_merge.stagings', compute='_compute_staging', inverse=readonly, store=True)
-    staging_ids = fields.Many2many('runbot_merge.stagings', string="Stagings", compute='_compute_stagings', inverse=readonly, context={"active_test": False})
+    staging_id = fields.Many2one('runbot_merge.stagings', compute='_compute_staging', inverse=readonly, readonly=True, store=True)
+    staging_ids = fields.Many2many('runbot_merge.stagings', string="Stagings", compute='_compute_stagings', inverse=readonly, readonly=True, context={"active_test": False})
 
     @api.depends('batch_id.batch_staging_ids.runbot_merge_stagings_id.active')
     def _compute_staging(self):
