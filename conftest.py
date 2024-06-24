@@ -481,6 +481,17 @@ def env(request, port, server, db, default_crons):
         if b"Traceback (most recent call last):" in server[1]:
             pytest.fail("unexpected error in logs, fix, or mark function as `expect_log_errors` to require.")
 
+@pytest.fixture
+def reviewer_admin(env, partners):
+    env['res.users'].create({
+        'partner_id': partners['reviewer'].id,
+        'login': 'reviewer',
+        'groups_id': [
+            (4, env.ref("base.group_user").id, 0),
+            (4, env.ref("runbot_merge.group_admin").id, 0),
+        ],
+    })
+
 def check(response):
     assert response.ok, response.text or response.reason
     return response

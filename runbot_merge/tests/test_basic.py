@@ -2801,6 +2801,7 @@ class TestBatching(object):
         ]
         assert not pr22.staging_id
 
+    @pytest.mark.usefixtures("reviewer_admin")
     def test_batching_urgent(self, env, repo, config):
         with repo:
             m = repo.make_commit(None, 'initial', None, tree={'a': 'some content'})
@@ -2920,6 +2921,7 @@ class TestBatching(object):
         assert p_01.skipchecks == False
         assert p_01.cancel_staging == True
 
+    @pytest.mark.usefixtures("reviewer_admin")
     def test_batching_urgenter_than_split(self, env, repo, config):
         """ p=alone PRs should take priority over split stagings (processing
         of a staging having CI-failed and being split into sub-stagings)
@@ -2959,6 +2961,7 @@ class TestBatching(object):
         assert not p_1.staging_id
         assert to_pr(env, pr0).staging_id
 
+    @pytest.mark.usefixtures("reviewer_admin")
     def test_urgent_failed(self, env, repo, config):
         """ Ensure pr[p=0,state=failed] don't get picked up
         """
@@ -3306,6 +3309,7 @@ class TestReviewing:
         env.run_crons()
         assert to_pr(env, pr).state == 'approved'
 
+    @pytest.mark.usefixtures("reviewer_admin")
     def test_skipchecks(self, env, repo, users, config):
         """Skipcheck makes the PR immediately ready (if it's not in error or
         something)
@@ -3622,8 +3626,66 @@ class TestRecognizeCommands:
             (users['reviewer'], "hansen do the thing"),
             (users['reviewer'], "hansen @bobby-b r+ :+1:"),
             seen(env, pr, users),
-            (users['user'], "@{reviewer} unknown command 'do'.\n\nFor your own safety I've ignored *everything in your entire comment*.".format_map(users)),
-            (users['user'], "@{reviewer} unknown command '@bobby-b'.\n\nFor your own safety I've ignored *everything in your entire comment*.".format_map(users)),
+            (users['user'], """\
+@{reviewer} unknown command 'do'.
+
+For your own safety I've ignored *everything in your entire comment*.
+
+Currently available commands:
+
+|command||
+|-|-|
+|`help`|displays this help|
+|`r(eview)+`|approves the PR, if it's a forwardport also approves all non-detached parents|
+|`r(eview)=<number>`|only approves the specified parents|
+|`fw=no`|does not forward-port this PR|
+|`fw=default`|forward-ports this PR normally|
+|`fw=skipci`|does not wait for a forward-port's statuses to succeed before creating the next one|
+|`up to <branch>`|only ports this PR forward to the specified branch (included)|
+|`merge`|integrate the PR with a simple merge commit, using the PR description as message|
+|`rebase-merge`|rebases the PR on top of the target branch the integrates with a merge commit, using the PR description as message|
+|`rebase-ff`|rebases the PR on top of the target branch, then fast-forwards|
+|`squash`|squashes the PR as a single commit on the target branch, using the PR description as message|
+|`delegate+`|grants approval rights to the PR author|
+|`delegate=<...>`|grants approval rights on this PR to the specified github users|
+|`default`|stages the PR normally|
+|`priority`|tries to stage this PR first, then adds `default` PRs if the staging has room|
+|`alone`|stages this PR only with other PRs of the same priority|
+|`cancel=staging`|automatically cancels the current staging when this PR becomes ready|
+|`check`|fetches or refreshes PR metadata, resets mergebot state|
+
+Note: this help text is dynamic and will change with the state of the PR.
+""".format_map(users)),
+            (users['user'], """\
+@{reviewer} unknown command '@bobby-b'.
+
+For your own safety I've ignored *everything in your entire comment*.
+
+Currently available commands:
+
+|command||
+|-|-|
+|`help`|displays this help|
+|`r(eview)+`|approves the PR, if it's a forwardport also approves all non-detached parents|
+|`r(eview)=<number>`|only approves the specified parents|
+|`fw=no`|does not forward-port this PR|
+|`fw=default`|forward-ports this PR normally|
+|`fw=skipci`|does not wait for a forward-port's statuses to succeed before creating the next one|
+|`up to <branch>`|only ports this PR forward to the specified branch (included)|
+|`merge`|integrate the PR with a simple merge commit, using the PR description as message|
+|`rebase-merge`|rebases the PR on top of the target branch the integrates with a merge commit, using the PR description as message|
+|`rebase-ff`|rebases the PR on top of the target branch, then fast-forwards|
+|`squash`|squashes the PR as a single commit on the target branch, using the PR description as message|
+|`delegate+`|grants approval rights to the PR author|
+|`delegate=<...>`|grants approval rights on this PR to the specified github users|
+|`default`|stages the PR normally|
+|`priority`|tries to stage this PR first, then adds `default` PRs if the staging has room|
+|`alone`|stages this PR only with other PRs of the same priority|
+|`cancel=staging`|automatically cancels the current staging when this PR becomes ready|
+|`check`|fetches or refreshes PR metadata, resets mergebot state|
+
+Note: this help text is dynamic and will change with the state of the PR.
+""".format_map(users)),
         ]
 
 class TestRMinus:

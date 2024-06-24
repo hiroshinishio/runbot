@@ -131,7 +131,36 @@ def test_disable(env, config, make_repo, users):
     assert set(pr.comments) == {
         seen(env, pr, users),
         (users['reviewer'], "hansen r+ up to"),
-        (users['user'], "@{reviewer} please provide a branch to forward-port to.\n\nFor your own safety I've ignored *everything in your entire comment*.".format_map(users)),
+        (users['user'], """\
+@{reviewer} please provide a branch to forward-port to.
+
+For your own safety I've ignored *everything in your entire comment*.
+
+Currently available commands:
+
+|command||
+|-|-|
+|`help`|displays this help|
+|`r(eview)+`|approves the PR, if it's a forwardport also approves all non-detached parents|
+|`r(eview)=<number>`|only approves the specified parents|
+|`fw=no`|does not forward-port this PR|
+|`fw=default`|forward-ports this PR normally|
+|`fw=skipci`|does not wait for a forward-port's statuses to succeed before creating the next one|
+|`up to <branch>`|only ports this PR forward to the specified branch (included)|
+|`merge`|integrate the PR with a simple merge commit, using the PR description as message|
+|`rebase-merge`|rebases the PR on top of the target branch the integrates with a merge commit, using the PR description as message|
+|`rebase-ff`|rebases the PR on top of the target branch, then fast-forwards|
+|`squash`|squashes the PR as a single commit on the target branch, using the PR description as message|
+|`delegate+`|grants approval rights to the PR author|
+|`delegate=<...>`|grants approval rights on this PR to the specified github users|
+|`default`|stages the PR normally|
+|`priority`|tries to stage this PR first, then adds `default` PRs if the staging has room|
+|`alone`|stages this PR only with other PRs of the same priority|
+|`cancel=staging`|automatically cancels the current staging when this PR becomes ready|
+|`check`|fetches or refreshes PR metadata, resets mergebot state|
+
+Note: this help text is dynamic and will change with the state of the PR.
+""".format_map(users)),
         (users['reviewer'], "hansen up to b"),
         (users['user'], "@{reviewer} branch 'b' is disabled, it can't be used as a forward port target.".format_map(users)),
         (users['reviewer'], "hansen up to foo"),

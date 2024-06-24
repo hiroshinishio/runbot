@@ -3,7 +3,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from functools import partial
 from operator import contains
-from typing import Callable, List, Optional, Union
+from typing import Callable, List, Optional, Union, Tuple
 
 
 def tokenize(line: str) -> Iterator[str]:
@@ -72,11 +72,18 @@ class Approve:
             return f"r={ids}"
         return 'review+'
 
+    @classmethod
+    def help(cls, _: bool) -> Iterator[Tuple[str, str]]:
+        yield "r(eview)+", "approves the PR, if it's a forwardport also approves all non-detached parents"
+        yield "r(eview)=<number>", "only approves the specified parents"
 
 class Reject:
     def __str__(self) -> str:
         return 'review-'
 
+    @classmethod
+    def help(cls, _: bool) -> Iterator[Tuple[str, str]]:
+        yield "r(eview)-", "removes approval of a previously approved PR, if the PR is staged the staging will be cancelled"
 
 class MergeMethod(enum.Enum):
     SQUASH = 'squash'
@@ -87,15 +94,30 @@ class MergeMethod(enum.Enum):
     def __str__(self) -> str:
         return self.value
 
+    @classmethod
+    def help(cls, _: bool) -> Iterator[Tuple[str, str]]:
+        yield str(cls.MERGE), "integrate the PR with a simple merge commit, using the PR description as message"
+        yield str(cls.REBASE_MERGE), "rebases the PR on top of the target branch the integrates with a merge commit, using the PR description as message"
+        yield str(cls.REBASE_FF), "rebases the PR on top of the target branch, then fast-forwards"
+        yield str(cls.SQUASH), "squashes the PR as a single commit on the target branch, using the PR description as message"
+
 
 class Retry:
     def __str__(self) -> str:
         return 'retry'
 
+    @classmethod
+    def help(cls, _: bool) -> Iterator[Tuple[str, str]]:
+        yield "retry", 're-tries staging a PR in the "error" state'
+
 
 class Check:
     def __str__(self) -> str:
         return 'check'
+
+    @classmethod
+    def help(cls, _: bool) -> Iterator[Tuple[str, str]]:
+        yield "check", "fetches or refreshes PR metadata, resets mergebot state"
 
 
 @dataclass
@@ -104,6 +126,10 @@ class Override:
 
     def __str__(self) -> str:
         return f"override={','.join(self.statuses)}"
+
+    @classmethod
+    def help(cls, _: bool) -> Iterator[Tuple[str, str]]:
+        yield "override=<...>", "marks overridable statuses as successful"
 
 
 @dataclass
@@ -115,6 +141,11 @@ class Delegate:
             return 'delegate+'
         return f"delegate={','.join(self.users)}"
 
+    @classmethod
+    def help(cls, _: bool) -> Iterator[Tuple[str, str]]:
+        yield "delegate+", "grants approval rights to the PR author"
+        yield "delegate=<...>", "grants approval rights on this PR to the specified github users"
+
 
 class Priority(enum.Enum):
     DEFAULT = enum.auto()
@@ -124,15 +155,29 @@ class Priority(enum.Enum):
     def __str__(self) -> str:
         return self.name.lower()
 
+    @classmethod
+    def help(cls, _: bool) -> Iterator[Tuple[str, str]]:
+        yield str(cls.DEFAULT), "stages the PR normally"
+        yield str(cls.PRIORITY), "tries to stage this PR first, then adds `default` PRs if the staging has room"
+        yield str(cls.ALONE), "stages this PR only with other PRs of the same priority"
+
 
 class CancelStaging:
     def __str__(self) -> str:
         return "cancel=staging"
 
+    @classmethod
+    def help(cls, _: bool) -> Iterator[Tuple[str, str]]:
+        yield "cancel=staging", "automatically cancels the current staging when this PR becomes ready"
+
 
 class SkipChecks:
     def __str__(self) -> str:
         return 'skipchecks'
+
+    @classmethod
+    def help(cls, _: bool) -> Iterator[Tuple[str, str]]:
+        yield "skipchecks", "bypasses both statuses and review"
 
 
 class FW(enum.Enum):
@@ -144,6 +189,13 @@ class FW(enum.Enum):
     def __str__(self) -> str:
         return f'fw={self.name.lower()}'
 
+    @classmethod
+    def help(cls, is_reviewer: bool) -> Iterator[Tuple[str, str]]:
+        yield str(cls.NO), "does not forward-port this PR"
+        if is_reviewer:
+            yield str(cls.DEFAULT), "forward-ports this PR normally"
+            yield str(cls.SKIPCI), "does not wait for a forward-port's statuses to succeed before creating the next one"
+
 
 @dataclass
 class Limit:
@@ -154,10 +206,27 @@ class Limit:
             return 'ignore'
         return f'up to {self.branch}'
 
+    @classmethod
+    def help(cls, _: bool) -> Iterator[Tuple[str, str]]:
+        yield "up to <branch>", "only ports this PR forward to the specified branch (included)"
+
 
 class Close:
     def __str__(self) -> str:
         return 'close'
+
+    @classmethod
+    def help(cls, _: bool) -> Iterator[Tuple[str, str]]:
+        yield str(cls()), "closes this forward-port"
+
+
+class Help:
+    def __str__(self) -> str:
+        return 'help'
+
+    @classmethod
+    def help(cls, _: bool) -> Iterator[Tuple[str, str]]:
+        yield str(cls()), "displays this help"
 
 
 Command = Union[
@@ -167,6 +236,7 @@ Command = Union[
     Check,
     Delegate,
     FW,
+    Help,
     Limit,
     MergeMethod,
     Override,
@@ -309,3 +379,6 @@ class Parser:
 
     def parse_close(self) -> Close:
         return Close()
+
+    def parse_help(self) -> Help:
+        return Help()

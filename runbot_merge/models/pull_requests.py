@@ -642,6 +642,51 @@ class PullRequests(models.Model):
                 'message': message,
                 'close': close,
             })
+
+        is_admin, is_reviewer, is_author = self._pr_acl(author)
+        _source_admin, source_reviewer, source_author = self.source_id._pr_acl(author)
+        # nota: 15.0 `has_group` completely doesn't work if the recordset is empty
+        super_admin = is_admin and author.user_ids and author.user_ids.has_group('runbot_merge.group_admin')
+
+        help_list: list[type(commands.Command)] = list(filter(None, [
+            commands.Help,
+
+            (self.source_id and (source_author or source_reviewer) or is_reviewer) and not self.reviewed_by and commands.Approve,
+            is_author and self.reviewed_by and commands.Reject,
+            (is_author or source_author) and self.error and commands.Retry,
+
+            is_author and not self.source_id and commands.FW,
+            is_author and commands.Limit,
+            source_author and self.source_id and commands.Close,
+
+            is_reviewer and commands.MergeMethod,
+            is_reviewer and commands.Delegate,
+
+            is_admin and commands.Priority,
+            super_admin and commands.SkipChecks,
+            is_admin and commands.CancelStaging,
+
+            author.override_rights and commands.Override,
+            is_author and commands.Check,
+        ]))
+        def format_help(warn_ignore: bool, address: bool = True) -> str:
+            s = [
+                'Currently available commands{}:'.format(
+                    f" for @{login}" if address else ""
+                ),
+                '',
+                '|command||',
+                '|-|-|',
+            ]
+            for command_type in help_list:
+                for cmd, text in command_type.help(is_reviewer):
+                    s.append(f"|`{cmd}`|{text}|")
+
+            s.extend(['', 'Note: this help text is dynamic and will change with the state of the PR.'])
+            if warn_ignore:
+                s.extend(["", "Warning: in invoking help, every other command has been ignored."])
+            return "\n".join(s)
+
         try:
             cmds: List[commands.Command] = [
                 ps
@@ -656,11 +701,21 @@ class PullRequests(models.Model):
                 utils.shorten(comment['body'] or '', 50),
                 exc_info=True
             )
-            feedback(message=f"@{login} {e.args[0]}.\n\nFor your own safety I've ignored *everything in your entire comment*.")
+            feedback(message=f"""@{login} {e.args[0]}.
+
+For your own safety I've ignored *everything in your entire comment*.
+
+{format_help(False, address=False)}
+""")
             return 'error'
 
-        is_admin, is_reviewer, is_author = self._pr_acl(author)
-        _source_admin, source_reviewer, source_author = self.source_id._pr_acl(author)
+        if any(isinstance(cmd, commands.Help) for cmd in cmds):
+            self.env['runbot_merge.pull_requests.feedback'].create({
+                'repository': self.repository.id,
+                'pull_request': self.number,
+                'message': format_help(len(cmds) != 1),
+            })
+            return "help"
 
         if not (is_author or self.source_id or (any(isinstance(cmd, commands.Override) for cmd in cmds) and author.override_rights)):
             # no point even parsing commands
@@ -775,7 +830,7 @@ class PullRequests(models.Model):
                     delegates.write({'delegate_reviewer': [(4, self.id, 0)]})
                 case commands.Priority() if is_admin:
                     self.batch_id.priority = str(command)
-                case commands.SkipChecks() if is_admin:
+                case commands.SkipChecks() if super_admin:
                     self.batch_id.skipchecks = True
                     self.reviewed_by = author
                     if not (self.squash or self.merge_method):

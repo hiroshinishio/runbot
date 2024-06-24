@@ -761,6 +761,7 @@ class TestMultiBatches:
         assert sp.mapped('batch_ids.prs') == \
             prs[2][0] | prs[2][1] | prs[3][0] | prs[3][1] | prs[4][0]
 
+@pytest.mark.usefixtures("reviewer_admin")
 def test_urgent(env, repo_a, repo_b, config):
     """ Either PR of a co-dependent pair being prioritised leads to the entire
     pair being prioritized
@@ -872,6 +873,7 @@ class TestBlocked:
         p = to_pr(env, pr)
         assert not p.blocked
 
+    @pytest.mark.usefixtures("reviewer_admin")
     def test_linked_unready(self, env, repo_a, repo_b, config):
         """ Create a PR A linked to a non-ready PR B,
         * A is blocked by default
