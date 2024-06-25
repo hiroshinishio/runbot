@@ -414,7 +414,7 @@ def handle_review(env, event):
         target=event['pull_request']['base']['ref'])
 
 def handle_ping(env, event):
-    print("Got ping! {}".format(event['zen']))
+    _logger.info("Got ping! %s", event['zen'])
     return "pong"
 
 EVENTS = {
