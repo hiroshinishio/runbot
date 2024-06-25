@@ -3,7 +3,7 @@ import itertools
 import time
 
 
-def shorten(text_ish, length):
+def shorten(text_ish, length, cont='...'):
     """ If necessary, cuts-off the text or bytes input and appends ellipsis to
     signal the cutoff, such that the result is below the provided length
     (according to whatever "len" means on the text-ish so bytes or codepoints
@@ -12,11 +12,10 @@ def shorten(text_ish, length):
     if len(text_ish or ()) <= length:
         return text_ish
 
-    cont = '...'
     if isinstance(text_ish, bytes):
         cont = cont.encode('ascii') # whatever
     # add enough room for the ellipsis
-    return text_ish[:length-3] + cont
+    return text_ish[:length-len(cont)] + cont
 
 BACKOFF_DELAYS = (0.1, 0.2, 0.4, 0.8, 1.6)
 def backoff(func=None, *, delays=BACKOFF_DELAYS, exc=Exception):

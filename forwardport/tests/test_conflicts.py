@@ -1,3 +1,4 @@
+import random
 import re
 import time
 from operator import itemgetter
@@ -176,6 +177,94 @@ More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
         'h': 'xxx',
         'i': 'a',
     }
+
+def test_massive_conflict(env, config, make_repo):
+    """If the conflict is large enough, the commit message may exceed ARG_MAX
+     and trigger E2BIG.
+    """
+    # CONFLICT (modify/delete): <file> deleted in <commit> (<title>) and modified in HEAD.  Version HEAD of <file> left in tree.
+    #
+    # 107 + 2 * len(filename) + len(title) per conflicting file.
+    # - filename: random.randbytes(10).hex() -> 20
+    # - title: random.randbytes(20).hex() -> 40
+    # -> 701 (!) files
+
+    files = []
+    while len(files) < 1500:
+        files.append(random.randbytes(10).hex())
+
+    # region setup
+    project = env['runbot_merge.project'].create({
+        'name': "thing",
+        'github_token': config['github']['token'],
+        'github_prefix': 'hansen',
+        'fp_github_token': config['github']['token'],
+        'fp_github_name': 'herbert',
+        'branch_ids': [
+            (0, 0, {'name': 'a', 'sequence': 100}),
+            (0, 0, {'name': 'b', 'sequence': 80}),
+        ],
+    })
+
+    repo = make_repo("repo")
+    env['runbot_merge.events_sources'].create({'repository': repo.name})
+
+    repo_id = env['runbot_merge.repository'].create({
+        'project_id': project.id,
+        'name': repo.name,
+        'required_statuses': "default",
+        'fp_remote_target': repo.name,
+        'group_id': False,
+    })
+    env['res.partner'].search([
+        ('github_login', '=', config['role_reviewer']['user'])
+    ]).write({
+        'review_rights': [(0, 0, {'repository_id': repo_id.id, 'review': True})]
+    })
+
+    with repo:
+        # create branch with a ton of empty files
+        repo.make_commits(
+            None,
+            Commit(
+                random.randbytes(20).hex(),
+                tree=dict.fromkeys(files, "xoxo"),
+            ),
+            ref='heads/a',
+        )
+
+        # removes all those files in the next branch
+        repo.make_commits(
+            'a',
+            Commit(
+                random.randbytes(20).hex(),
+                tree=dict.fromkeys(files, "content!"),
+            ),
+            ref='heads/b',
+        )
+    # endregion setup
+
+    with repo:
+        # update all the files
+        repo.make_commits(
+            'a',
+            Commit(random.randbytes(20).hex(), tree={'a': '1'}),
+            Commit(random.randbytes(20).hex(), tree={'x': '1'}, reset=True),
+            ref='heads/change',
+        )
+        pr = repo.make_pr(target='a', head='change')
+        repo.post_status('refs/heads/change', 'success')
+        pr.post_comment('hansen rebase-ff r+', config['role_reviewer']['token'])
+    env.run_crons()
+
+    with repo:
+        repo.post_status('staging.a', 'success')
+    env.run_crons()
+
+    # we don't actually need more, the bug crashes the forward port entirely so
+    # the PR is never even created
+    _pra_id, _prb_id = env['runbot_merge.pull_requests'].search([], order='number')
+
 
 def test_conflict_deleted(env, config, make_repo):
     prod, other = make_basic(env, config, make_repo)
