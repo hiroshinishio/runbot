@@ -652,7 +652,7 @@ class PullRequests(models.Model):
             commands.Help,
 
             (self.source_id and (source_author or source_reviewer) or is_reviewer) and not self.reviewed_by and commands.Approve,
-            is_author and self.reviewed_by and commands.Reject,
+            (is_author or source_author) and self.reviewed_by and commands.Reject,
             (is_author or source_author) and self.error and commands.Retry,
 
             is_author and not self.source_id and commands.FW,
@@ -783,7 +783,7 @@ For your own safety I've ignored *everything in your entire comment*.
                         msg = f"tried to approve PRs {command.ids} but the current PR is {self.number}"
                     else:
                         msg = self._approve(author, login)
-                case commands.Reject() if is_author:
+                case commands.Reject() if is_author or source_author:
                     if self.batch_id.skipchecks or self.reviewed_by:
                         if self.error:
                             self.error = False
