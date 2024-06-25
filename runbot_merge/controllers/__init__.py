@@ -386,6 +386,10 @@ def handle_comment(env, event):
     issue = event['issue']['number']
     author = event['comment']['user']['login']
     comment = event['comment']['body']
+    if len(comment) > 5000:
+        _logger.warning('comment(%s): %s %s#%s => ignored (%d characters)', event['comment']['html_url'], author, repo, issue, len(comment))
+        return "ignored: too big"
+
     _logger.info('comment[%s]: %s %s#%s %r', event['action'], author, repo, issue, comment)
     if event['action'] != 'created':
         return "Ignored: action (%r) is not 'created'" % event['action']
@@ -397,6 +401,9 @@ def handle_review(env, event):
     pr = event['pull_request']['number']
     author = event['review']['user']['login']
     comment = event['review']['body'] or ''
+    if len(comment) > 5000:
+        _logger.warning('comment(%s): %s %s#%s => ignored (%d characters)', event['review']['html_url'], author, repo, pr, len(comment))
+        return "ignored: too big"
 
     _logger.info('review[%s]: %s %s#%s %r', event['action'], author, repo, pr, comment)
     if event['action'] != 'submitted':
