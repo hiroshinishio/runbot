@@ -1,5 +1,4 @@
 import pytest
-import requests
 
 from utils import seen, Commit, make_basic, to_pr
 
@@ -9,7 +8,7 @@ from utils import seen, Commit, make_basic, to_pr
     pytest.param('b', 'b', 0, id='current'),
     pytest.param('b', 'a', 0, id='earlier'),
 ])
-def test_configure_fp_limit(env, config, make_repo, source, limit, count, port):
+def test_configure_fp_limit(env, config, make_repo, source, limit, count, page):
     prod, other = make_basic(env, config, make_repo, statuses="default")
     with prod:
         [c] = prod.make_commits(
@@ -35,15 +34,13 @@ def test_configure_fp_limit(env, config, make_repo, source, limit, count, port):
     assert not descendants.limit_id, "descendant should not inherit the limit explicitly"
 
     # check that the basic thingie works
-    r = requests.get(f'http://localhost:{port}/{prod.name}/pull/{pr.number}.png')
-    assert r.ok, r.text
+    page(f'/{prod.name}/pull/{pr.number}.png')
 
     if descendants:
         c = env['runbot_merge.branch'].search([('name', '=', 'c')])
         descendants.limit_id = c.id
 
-        r = requests.get(f'http://localhost:{port}/{prod.name}/pull/{pr.number}.png')
-        assert r.ok
+        page(f'/{prod.name}/pull/{pr.number}.png')
 
 def test_ignore(env, config, make_repo, users):
     """ Provide an "ignore" command which is equivalent to setting the limit

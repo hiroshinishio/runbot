@@ -385,6 +385,15 @@ def port():
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         return s.getsockname()[1]
 
+@pytest.fixture
+def page(port):
+    with requests.Session() as s:
+        def get(url):
+            r = s.get('http://localhost:{}{}'.format(port, url))
+            r.raise_for_status()
+            return r.content
+        yield get
+
 @pytest.fixture(scope='session')
 def dummy_addons_path():
     with tempfile.TemporaryDirectory() as dummy_addons_path:

@@ -1,18 +1,8 @@
 import pytest
-import requests
 
 @pytest.fixture()
 def module():
     return 'runbot_merge'
-
-@pytest.fixture
-def page(port):
-    s = requests.Session()
-    def get(url):
-        r = s.get('http://localhost:{}{}'.format(port, url))
-        r.raise_for_status()
-        return r.content
-    return get
 
 @pytest.fixture
 def default_crons():
