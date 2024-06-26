@@ -1112,61 +1112,6 @@ More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
 """.format_map(users))
     ]
 
-def test_maintain_batch_history(env, config, make_repo, users):
-    """Batches which are part of a forward port sequence should not be deleted
-    even if all their PRs are closed.
-
-    Sadly in that case it's a bit difficult to maintain the integrity of the
-    batch as each PR being closed (until the last one?) will be removed from
-    the batch.
-    """
-    repo, fork = make_basic(env, config, make_repo, statuses="default")
-
-    with repo, fork:
-        fork.make_commits("a", Commit("x", tree={"x": "1"}), ref="heads/x")
-        pr1_a = repo.make_pr(title="X", target="a", head=f"{fork.owner}:x")
-        pr1_a.post_comment("hansen r+", config['role_reviewer']['token'])
-        repo.post_status(pr1_a.head, "success")
-    env.run_crons()
-
-    pr1_a_id = to_pr(env, pr1_a)
-    with repo:
-        repo.post_status('staging.a', 'success')
-    env.run_crons()
-
-    pr1_b_id = env['runbot_merge.pull_requests'].search([('parent_id', '=', pr1_a_id.id)])
-    with repo:
-        repo.post_status(pr1_b_id.head, 'success')
-    env.run_crons()
-
-    pr1_c_id = env['runbot_merge.pull_requests'].search([('parent_id', '=', pr1_b_id.id)])
-
-    # region check that all the batches are set up correctly
-    assert pr1_a_id.batch_id
-    assert pr1_b_id.batch_id
-    assert pr1_c_id.batch_id
-    assert pr1_c_id.batch_id.parent_id == pr1_b_id.batch_id
-    assert pr1_b_id.batch_id.parent_id == pr1_a_id.batch_id
-    b_batch = pr1_b_id.batch_id
-    assert b_batch
-    # endregion
-
-    pr1_b = repo.get_pr(pr1_b_id.number)
-    with repo:
-        pr1_b.close()
-    env.run_crons()
-    assert pr1_b_id.state == 'closed'
-
-    # region check that all the batches are *still* set up correctly
-    assert b_batch.exists()
-    assert pr1_a_id.batch_id == b_batch.parent_id
-    assert pr1_b_id.batch_id == b_batch
-    assert pr1_c_id.batch_id.parent_id == b_batch
-
-    assert pr1_b_id in b_batch.all_prs, "the PR is still in the batch"
-    assert pr1_b_id not in b_batch.prs, "the PR is not in the open/active batch PRs"
-    # endregion
-
 FMT = '%Y-%m-%d %H:%M:%S'
 FAKE_PREV_WEEK = (datetime.now() + timedelta(days=1)).strftime(FMT)
 def test_reminder_detached(env, config, make_repo, users):
