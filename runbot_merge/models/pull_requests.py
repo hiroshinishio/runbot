@@ -842,6 +842,8 @@ For your own safety I've ignored *everything in your entire comment*.
                 case commands.CancelStaging() if is_admin:
                     self.batch_id.cancel_staging = True
                     if not self.batch_id.blocked:
+                        if splits := self.target.split_ids:
+                            splits.unlink()
                         self.target.active_staging_id.cancel(
                             "Unstaged by %s on %s",
                             author.github_login, self.display_name,

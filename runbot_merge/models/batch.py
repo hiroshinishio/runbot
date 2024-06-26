@@ -227,10 +227,10 @@ class Batch(models.Model):
                 batch.blocked = f"Multiple target branches: {', '.join(targets.mapped('name'))!r}"
             else:
                 if batch.blocked and batch.cancel_staging:
+                    if splits := batch.target.split_ids:
+                        splits.unlink()
                     batch.target.active_staging_id.cancel(
-                        'unstaged by %s on %s (%s)',
-                        self.env.user.login,
-                        batch,
+                        'unstaged by %s becoming ready',
                         ', '.join(batch.prs.mapped('display_name')),
                     )
                 batch.blocked = False
