@@ -957,7 +957,7 @@ def test_disable_branch_with_batches(env, config, make_repo, users):
     })
     # endregion
 
-    # region set up forward ported batch
+    # region set up forward ported batches
     with repo, fork, repo2, fork2:
         fork.make_commits("a", Commit("x", tree={"x": "1"}), ref="heads/x")
         pr1_a = repo.make_pr(title="X", target="a", head=f"{fork.owner}:x")
@@ -968,13 +968,17 @@ def test_disable_branch_with_batches(env, config, make_repo, users):
         pr2_a = repo2.make_pr(title="X", target="a", head=f"{fork2.owner}:x")
         pr2_a.post_comment("hansen r+", config['role_reviewer']['token'])
         repo2.post_status(pr2_a.head, "success")
+
+        fork.make_commits("a", Commit("y", tree={"y": "1"}), ref="heads/y")
+        pr3_a = repo.make_pr(title="Y", target="a", head=f"{fork.owner}:y")
+        pr3_a.post_comment("hansen r+", config['role_reviewer']['token'])
+        repo.post_status(pr3_a.head, 'success')
     # remove just pr2 from the forward ports (maybe?)
     pr2_a_id = to_pr(env, pr2_a)
     pr2_a_id.limit_id = branch_b.id
     env.run_crons()
     assert pr2_a_id.limit_id == branch_b
     # endregion
-
 
     with repo, repo2:
         repo.post_status('staging.a', 'success')
@@ -984,10 +988,15 @@ def test_disable_branch_with_batches(env, config, make_repo, users):
     PullRequests = env['runbot_merge.pull_requests']
     pr1_b_id = PullRequests.search([('parent_id', '=', to_pr(env, pr1_a).id)])
     pr2_b_id = PullRequests.search([('parent_id', '=', pr2_a_id.id)])
+    pr3_b_id = PullRequests.search([('parent_id', '=', to_pr(env, pr3_a).id)])
     assert pr1_b_id.parent_id
     assert pr1_b_id.state == 'opened'
     assert pr2_b_id.parent_id
     assert pr2_b_id.state == 'opened'
+    assert pr3_b_id.parent_id
+    assert pr3_b_id.state == 'opened'
+    # detach pr3 (?)
+    pr3_b_id.write({'parent_id': False, 'detach_reason': 'because'})
 
     b_id = proj.branch_ids.filtered(lambda b: b.name == 'b')
     proj.write({
@@ -995,8 +1004,10 @@ def test_disable_branch_with_batches(env, config, make_repo, users):
     })
     env.run_crons()
     assert not b_id.active
-    assert PullRequests.search_count([]) == 5, "should have ported pr1 but not pr2"
-    assert PullRequests.search([], order="number DESC", limit=1).parent_id == pr1_b_id
+    # pr1_a, pr1_b, pr1_c, pr2_a, pr2_b, pr3_a, pr3_b, pr3_c
+    assert PullRequests.search_count([]) == 8, "should have ported pr1 and pr3 but not pr2"
+    assert PullRequests.search_count([('parent_id', '=', pr1_b_id.id)])
+    assert PullRequests.search_count([('parent_id', '=', pr3_b_id.id)])
 
     assert repo.get_pr(pr1_b_id.number).comments == [
         seen(env, repo.get_pr(pr1_b_id.number), users),

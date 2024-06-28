@@ -83,12 +83,11 @@ class Project(models.Model):
                     # and has not already been forward ported
                     and Batch.search_count([('parent_id', '=', b.id)]) == 0
                 )
-                ported |= extant.prs.filtered(lambda p: p._find_next_target())
-                # enqueue a forward port as if the now deactivated branch had
-                # been skipped over (which is the normal fw behaviour)
-                for b in extant.with_context(force_fw=True):
-                    # otherwise enqueue a followup
-                    b._schedule_fp_followup()
+
+                # PRs may have different limits in the same batch so only notify
+                # those which actually needed porting
+                ported |= extant._schedule_fp_followup(force_fw=True)\
+                    .prs.filtered(lambda p: p._find_next_target())
 
         if not ported:
             return
