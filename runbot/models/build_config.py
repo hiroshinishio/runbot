@@ -19,7 +19,7 @@ from odoo.tools.safe_eval import safe_eval, test_python_expr, _SAFE_OPCODES, to_
 # to simplify some python step by wraping the content in a function to allow return statement and get closer to other
 # steps
 
-_SAFE_OPCODES |= set(to_opcodes(['LOAD_DEREF', 'STORE_DEREF', 'LOAD_CLOSURE']))
+_SAFE_OPCODES |= set(to_opcodes(['LOAD_DEREF', 'STORE_DEREF', 'LOAD_CLOSURE', 'MAKE_CELL']))
 
 _logger = logging.getLogger(__name__)
 
