@@ -72,8 +72,8 @@ def test_ignore(env, config, make_repo, users):
         (users['reviewer'], "hansen ignore"),
         (users['reviewer'], "hansen r+ fw=no"),
         (users['user'], "'ignore' is deprecated, use 'fw=no' to disable forward porting."),
-        (users['user'], "Forward-port disabled."),
-        (users['user'], "Forward-port disabled."),
+        (users['user'], "Forward-port disabled (via limit)."),
+        (users['user'], "Disabled forward-porting."),
     ]
 
 @pytest.mark.expect_log_errors(reason="one of the limit-setting does not provide a branch name")

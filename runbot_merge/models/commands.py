@@ -363,6 +363,8 @@ class Parser:
         self.assert_next('=')
         f = next(self.it, "")
         try:
+            if f in ('disable', 'disabled'):
+                return FW.NO
             return FW[f.upper()]
         except KeyError:
             raise CommandError(f"unknown fw configuration {f or None!r}") from None

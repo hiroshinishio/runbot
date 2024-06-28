@@ -550,6 +550,9 @@ class Stagings(models.Model):
         if vals.get('active') is False and self.state == 'success':
             # check all batches to see if they should be forward ported
             for b in self.with_context(active_test=False).batch_ids:
+                if b.fw_policy == 'no':
+                    continue
+
                 # if all PRs of a batch have parents they're part of an FP
                 # sequence and thus handled separately, otherwise they're
                 # considered regular merges

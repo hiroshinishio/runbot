@@ -68,9 +68,10 @@ class Batch(models.Model):
     active = fields.Boolean(compute='_compute_active', store=True, help="closed batches (batches containing only closed PRs)")
 
     fw_policy = fields.Selection([
+        ('no', "Do not port forward"),
         ('default', "Default"),
         ('skipci', "Skip CI"),
-    ], required=True, default="default", string="Forward Port Policy")
+    ], required=True, default="default", string="Forward Port Policy", tracking=True)
 
     merge_date = fields.Datetime(tracking=True)
     # having skipchecks skip both validation *and approval* makes sense because
@@ -89,7 +90,7 @@ class Batch(models.Model):
         ('default', "Default"),
         ('priority', "Priority"),
         ('alone', "Alone"),
-    ], default='default', group_operator=None, required=True,
+    ], default='default', group_operator=None, required=True, tracking=True,
         column_type=enum(_name, 'priority'),
     )
 

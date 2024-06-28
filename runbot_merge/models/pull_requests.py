@@ -873,35 +873,21 @@ For your own safety I've ignored *everything in your entire comment*.
                 case commands.Close() if source_author:
                     feedback(close=True)
                 case commands.FW():
-                    if command == commands.FW.NO:
-                        if is_author:
-                            for p in self.batch_id.prs:
-                                ping, m = p._maybe_update_limit(self.target.name)
+                    match command:
+                        case commands.FW.NO if is_author or source_author:
+                            message = "Disabled forward-porting."
+                        case commands.FW.DEFAULT if is_author or source_author:
+                            message = "Waiting for CI to create followup forward-ports."
+                        case commands.FW.SKIPCI if is_reviewer or source_reviewer:
+                            message = "Not waiting for CI to create followup forward-ports."
+                        case commands.FW.SKIPMERGE if is_reviewer or source_reviewer:
+                            message = "Not waiting for merge to create followup forward-ports."
+                        case _:
+                            msg = f"you don't have the right to {command}."
 
-                                if ping and p == self:
-                                    msg = m
-                                else:
-                                    if ping:
-                                        m = f"@{login} {m}"
-                                    self.env['runbot_merge.pull_requests.feedback'].create({
-                                        'repository': p.repository.id,
-                                        'pull_request': p.number,
-                                        'message': m,
-                                    })
-                        else:
-                            msg = "you can't set a forward-port limit."
-                    elif source_reviewer or is_reviewer:
+                    if not msg:
                         (self.source_id or self).batch_id.fw_policy = command.name.lower()
-                        match command:
-                            case commands.FW.DEFAULT:
-                                message = "Waiting for CI to create followup forward-ports."
-                            case commands.FW.SKIPCI:
-                                message = "Not waiting for CI to create followup forward-ports."
-                            case commands.FW.SKIPMERGE:
-                                message = "Not waiting for merge to create followup forward-ports."
                         feedback(message=message)
-                    else:
-                        msg = "you can't configure forward-port CI."
                 case commands.Limit(branch) if is_author:
                     if branch is None:
                         feedback(message="'ignore' is deprecated, use 'fw=no' to disable forward porting.")
@@ -957,7 +943,7 @@ For your own safety I've ignored *everything in your entire comment*.
         if not self.source_id and self.state != 'merged':
             self.limit_id = limit_id
             if branch_key(limit_id) <= branch_key(self.target):
-                return False, "Forward-port disabled."
+                return False, "Forward-port disabled (via limit)."
             else:
                 return False, f"Forward-porting to {limit_id.name!r}."
 
