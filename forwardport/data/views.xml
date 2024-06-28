@@ -36,11 +36,17 @@
                     <t t-foreach="groups" t-as="group">
                         <span>
                             <t t-if="group == current_group">
-                                <span class="bg-primary" t-out="group.display_name"/>
+                                <span class="bg-primary">
+                                    <t t-out="group.display_name"/>
+                                    (<t t-out="outstanding_per_group[group]"/>)
+                                </span>
                                 <a t-att-href="link()" class="btn fa fa-times p-0"/>
                             </t>
                             <t t-else="">
-                                <a t-att-href="link(group=group.id, partner=0)" t-out="group.display_name"/>
+                                <a t-att-href="link(group=group.id, partner=0)">
+                                    <t t-out="group.display_name"/>
+                                    (<t t-out="outstanding_per_group[group]"/>)
+                                </a>
                             </t>
                         </span>
                     </t>
@@ -51,7 +57,8 @@
                         <t t-set="created" t-value="outstanding_per_author[culprit]"/>
                         <a t-att-href="link(partner=culprit.id)"
                            t-attf-title="approved {{approved}}, created {{created}}"
-                        ><t t-out="culprit.display_name"/>:
+                           t-att-class="'bg-primary' if culprit == env.user.partner_id else None"
+                        ><t t-out="culprit.name"/>:
                             <t t-if="approved" t-out="approved"/>
                             <t t-if="approved and created"> + </t>
                             <t t-if="created" t-out="created"/>

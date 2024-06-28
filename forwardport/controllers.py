@@ -66,18 +66,23 @@ class Dashboard(MergebotDashboard):
             ('state', 'in', ['opened', 'validated', 'approved', 'ready', 'error']),
             ('source_id', 'in', PullRequests._search(source_filter)),
         ])
+
+        outstanding_per_group = collections.Counter()
         outstanding_per_author = collections.Counter()
         outstanding_per_reviewer = collections.Counter()
         outstandings = []
         for source in outstanding.mapped('source_id').sorted('merge_date'):
+            prs = source.forwardport_ids.filtered(lambda p: p.state not in ['merged', 'closed'])
             outstandings.append({
                 'source': source,
-                'prs': source.forwardport_ids.filtered(lambda p: p.state not in ['merged', 'closed']),
+                'prs': prs,
             })
             if authors:
-                outstanding_per_author[source.author] += 1
+                outstanding_per_author[source.author] += len(prs)
+                outstanding_per_group[source.author.commercial_partner_id] += len(prs)
             if reviewers and source:
-                outstanding_per_reviewer[source.reviewed_by] += 1
+                outstanding_per_reviewer[source.reviewed_by] += len(prs)
+                outstanding_per_group[source.reviewed_by.commercial_partner_id] += len(prs)
 
         culprits = Partners.browse(p.id for p, _ in (outstanding_per_reviewer + outstanding_per_author).most_common())
         return request.render('forwardport.outstanding', {
@@ -89,6 +94,7 @@ class Dashboard(MergebotDashboard):
             'current_group': group,
             'outstanding_per_author': outstanding_per_author,
             'outstanding_per_reviewer': outstanding_per_reviewer,
+            'outstanding_per_group': outstanding_per_group,
             'outstanding': outstandings,
             'link': link,
         })
