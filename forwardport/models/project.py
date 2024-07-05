@@ -19,9 +19,7 @@ import json
 import logging
 import operator
 import subprocess
-import tempfile
 import typing
-from pathlib import Path
 
 import dateutil.relativedelta
 import requests
@@ -30,7 +28,6 @@ from odoo import models, fields, api
 from odoo.exceptions import UserError
 from odoo.osv import expression
 from odoo.tools.misc import topological_sort, groupby
-from odoo.tools.appdirs import user_cache_dir
 from odoo.addons.base.models.res_partner import Partner
 from odoo.addons.runbot_merge import git, utils
 from odoo.addons.runbot_merge.models.pull_requests import Branch
@@ -289,17 +286,11 @@ class PullRequests(models.Model):
         return sorted(commits, key=lambda c: idx[c['sha']])
 
 
-    def _create_fp_branch(self, target_branch, fp_branch_name, cleanup):
+    def _create_fp_branch(self, source, target_branch):
         """ Creates a forward-port for the current PR to ``target_branch`` under
         ``fp_branch_name``.
 
         :param target_branch: the branch to port forward to
-        :param fp_branch_name: the name of the branch to create the FP under
-        :param ExitStack cleanup: so the working directories can be cleaned up
-        :return: A pair of an optional conflict information and a repository. If
-                 present the conflict information is composed of the hash of the
-                 conflicting commit, the stderr and stdout of the failed
-                 cherrypick and a list of all PR commit hashes
         :rtype: (None | (str, str, str, list[commit]), Repo)
         """
         logger = _logger.getChild(str(self.id))
@@ -308,104 +299,52 @@ class PullRequests(models.Model):
             "Forward-porting %s (%s) to %s",
             self.display_name, root.display_name, target_branch.name
         )
-        source = git.get_local(self.repository, 'fp_github')
-        r = source.with_config(stdout=subprocess.PIPE, stderr=subprocess.STDOUT).fetch()
-        logger.info("Updated cache repo %s:\n%s", source._directory, r.stdout.decode())
+        tree = source.with_config(stdout=subprocess.PIPE, stderr=subprocess.STDOUT).fetch()
+        logger.info("Updated cache repo %s:\n%s", source._directory, tree.stdout.decode())
 
-        logger.info("Create working copy...")
-        cache_dir = user_cache_dir('forwardport')
-        # PullRequest.display_name is `owner/repo#number`, so `owner` becomes a
-        # directory, `TemporaryDirectory` only creates the leaf, so we need to
-        # make sure `owner` exists in `cache_dir`.
-        Path(cache_dir, root.repository.name).parent.mkdir(parents=True, exist_ok=True)
-        working_copy = source.clone(
-            cleanup.enter_context(
-                tempfile.TemporaryDirectory(
-                    prefix=f'{root.display_name}-to-{target_branch.name}',
-                    dir=cache_dir)),
-            branch=target_branch.name
-        )
-
-        r = working_copy.with_config(stdout=subprocess.PIPE, stderr=subprocess.STDOUT) \
-            .fetch(git.source_url(self.repository, 'fp_github'), root.head)
+        tree = source.with_config(stdout=subprocess.PIPE, stderr=subprocess.STDOUT) \
+            .fetch(git.source_url(self.repository), root.head)
         logger.info(
-            "Fetched head of %s into %s:\n%s",
+            "Fetched head of %s (%s):\n%s",
             root.display_name,
-            working_copy._directory,
-            r.stdout.decode()
+            root.head,
+            tree.stdout.decode()
         )
-        if working_copy.check(False).cat_file(e=root.head).returncode:
+        if source.check(False).cat_file(e=root.head).returncode:
             raise ForwardPortError(
                 f"During forward port of {self.display_name}, unable to find "
                 f"expected head of {root.display_name} ({root.head})"
             )
 
-        project_id = self.repository.project_id
-        # add target remote
-        working_copy.remote(
-            'add', 'target',
-            'https://{p.fp_github_token}@github.com/{r.fp_remote_target}'.format(
-                r=self.repository,
-                p=project_id
-            )
-        )
-        logger.info("Create FP branch %s in %s", fp_branch_name, working_copy._directory)
-        working_copy.checkout(b=fp_branch_name)
-
         try:
-            root._cherry_pick(working_copy)
-            return None, working_copy
+            return None, root._cherry_pick(source, target_branch.name)
         except CherrypickError as e:
             h, out, err, commits = e.args
 
-            # using git diff | git apply -3 to get the entire conflict set
-            # turns out to not work correctly: in case files have been moved
-            # / removed (which turns out to be a common source of conflicts
-            # when forward-porting) it'll just do nothing to the working copy
-            # so the "conflict commit" will be empty
-            # switch to a squashed-pr branch
-            working_copy.check(True).checkout('-bsquashed', root.head)
             # commits returns oldest first, so youngest (head) last
             head_commit = commits[-1]['commit']
 
             to_tuple = operator.itemgetter('name', 'email')
-            def to_dict(term, vals):
-                return {'GIT_%s_NAME' % term: vals[0], 'GIT_%s_EMAIL' % term: vals[1], 'GIT_%s_DATE' % term: vals[2]}
             authors, committers = set(), set()
-            for c in (c['commit'] for c in commits):
-                authors.add(to_tuple(c['author']))
-                committers.add(to_tuple(c['committer']))
-            fp_authorship = (project_id.fp_github_name, '', '')
+            for commit in (c['commit'] for c in commits):
+                authors.add(to_tuple(commit['author']))
+                committers.add(to_tuple(commit['committer']))
+            fp_authorship = (self.repository.project_id.fp_github_name, '', '')
             author = fp_authorship if len(authors) != 1 \
                 else authors.pop() + (head_commit['author']['date'],)
             committer = fp_authorship if len(committers) != 1 \
                 else committers.pop() + (head_commit['committer']['date'],)
-            conf = working_copy.with_config(env={
-                **to_dict('AUTHOR', author),
-                **to_dict('COMMITTER', committer),
-                'GIT_COMMITTER_DATE': '',
-            })
-            # squash to a single commit
-            conf.reset('--soft', commits[0]['parents'][0]['sha'])
-            conf.commit(a=True, message="temp")
-            squashed = conf.stdout().rev_parse('HEAD').stdout.strip().decode()
-
-            # switch back to the PR branch
-            conf.checkout(fp_branch_name)
-            # cherry-pick the squashed commit to generate the conflict
-            conf.with_params(
+            conf = source.with_params(
                 'merge.renamelimit=0',
                 'merge.renames=copies',
                 'merge.conflictstyle=zdiff3'
-            ) \
-                .with_config(check=False) \
-                .cherry_pick(squashed, no_commit=True, strategy="ort")
-            status = conf.stdout().status(short=True, untracked_files='no').stdout.decode()
-            if err.strip():
-                err = err.rstrip() + '\n----------\nstatus:\n' + status
-            else:
-                err = 'status:\n' + status
+            ).with_config(stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
+            tree = conf.with_config(check=False).merge_tree(
+                '--merge-base', commits[0]['parents'][0]['sha'],
+                target_branch.name,
+                root.head,
+            )
             # if there was a single commit, reuse its message when committing
             # the conflict
             if len(commits) == 1:
@@ -421,77 +360,107 @@ stderr:
 {err}
 """
 
-            conf.with_config(input=str(msg).encode()) \
-                .commit(all=True, allow_empty=True, file='-')
+            target_head = source.stdout().rev_parse(target_branch.name).stdout.decode().strip()
+            commit = conf.commit_tree(
+                tree=tree.stdout.decode().splitlines(keepends=False)[0],
+                parents=[target_head],
+                message=str(msg),
+                author=author,
+                committer=committer[:2],
+            )
+            assert commit.returncode == 0,\
+                f"commit failed\n\n{commit.stdout.decode()}\n\n{commit.stderr.decode}"
+            hh = commit.stdout.strip()
 
-            return (h, out, err, [c['sha'] for c in commits]), working_copy
+            return (h, out, err, [c['sha'] for c in commits]), hh
 
-    def _cherry_pick(self, working_copy):
-        """ Cherrypicks ``self`` into the working copy
+    def _cherry_pick(self, repo: git.Repo, branch: Branch) -> str:
+        """ Cherrypicks ``self`` into ``branch``
 
-        :return: ``True`` if the cherrypick was successful, ``False`` otherwise
+        :return: the HEAD of the forward-port is successful
+        :raises CherrypickError: in case of conflict
         """
         # <xxx>.cherrypick.<number>
         logger = _logger.getChild(str(self.id)).getChild('cherrypick')
 
-        # original head so we can reset
-        original_head = working_copy.stdout().rev_parse('HEAD').stdout.decode().strip()
+        # target's head
+        head = repo.stdout().rev_parse(branch).stdout.decode().strip()
 
         commits = self.commits()
-        logger.info("%s: copy %s commits to %s\n%s", self, len(commits), original_head, '\n'.join(
-            '- %s (%s)' % (c['sha'], c['commit']['message'].splitlines()[0])
-            for c in commits
-        ))
+        logger.info(
+            "%s: copy %s commits to %s (%s)%s",
+            self, len(commits), branch, head, ''.join(
+                '\n- %s: %s' % (c['sha'], c['commit']['message'].splitlines()[0])
+                for c in commits
+            )
+        )
 
-        conf_base = working_copy.with_params(
+        conf = repo.with_params(
             'merge.renamelimit=0',
             'merge.renames=copies',
         ).with_config(
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            check=False
+            check=False,
         )
         for commit in commits:
             commit_sha = commit['sha']
-            # config (global -c) or commit options don't really give access to
-            # setting dates
-            cm = commit['commit'] # get the "git" commit object rather than the "github" commit resource
-            env = {
-                'GIT_AUTHOR_NAME': cm['author']['name'],
-                'GIT_AUTHOR_EMAIL': cm['author']['email'],
-                'GIT_AUTHOR_DATE': cm['author']['date'],
-                'GIT_COMMITTER_NAME': cm['committer']['name'],
-                'GIT_COMMITTER_EMAIL': cm['committer']['email'],
-            }
-            configured = working_copy.with_config(env=env)
+            # merge-tree is a bit stupid and gets confused when the options
+            # follow the parameters
+            r = conf.merge_tree('--merge-base', commit['parents'][0]['sha'], head, commit_sha)
+            new_tree = r.stdout.decode().splitlines(keepends=False)[0]
+            if r.returncode:
+                # For merge-tree the stdout on conflict is of the form
+                #
+                # oid of toplevel tree
+                # conflicted file info+
+                #
+                # informational messages+
+                #
+                # to match cherrypick we only want the informational messages,
+                # so strip everything else
+                r.stdout = r.stdout.split(b'\n\n')[-1]
+            else:
+                # By default cherry-pick fails if a non-empty commit becomes
+                # empty (--empty=stop), also it fails when cherrypicking already
+                # empty commits which I didn't think we prevented but clearly we
+                # do...?
+                parent_tree = conf.rev_parse(f'{head}^{{tree}}').stdout.decode().strip()
+                if parent_tree == new_tree:
+                    r.returncode = 1
+                    r.stdout = f"You are currently cherry-picking commit {commit_sha}.".encode()
+                    r.stderr = b"The previous cherry-pick is now empty, possibly due to conflict resolution."
 
-            conf = conf_base.with_config(env={**env, 'GIT_TRACE': 'true'})
-            # first try with default / low renamelimit
-            r = conf.cherry_pick(commit_sha, strategy="ort")
             logger.debug("Cherry-picked %s: %s\n%s\n%s", commit_sha, r.returncode, r.stdout.decode(), _clean_rename(r.stderr.decode()))
-
-            if r.returncode: # pick failed, reset and bail
+            if r.returncode: # pick failed, bail
                 # try to log inflateInit: out of memory errors as warning, they
-                # seem to return the status code 128
+                # seem to return the status code 128 (nb: may not work anymore
+                # with merge-tree, idk)
                 logger.log(
                     logging.WARNING if r.returncode == 128 else logging.INFO,
                     "forward-port of %s (%s) failed at %s",
                     self, self.display_name, commit_sha)
-                configured.reset('--hard', original_head)
+
                 raise CherrypickError(
                     commit_sha,
                     r.stdout.decode(),
                     _clean_rename(r.stderr.decode()),
                     commits
                 )
+            # get the "git" commit object rather than the "github" commit resource
+            cc = conf.commit_tree(
+                tree=new_tree,
+                parents=[head],
+                message=str(self._make_fp_message(commit)),
+                author=map_author(commit['commit']['author']),
+                committer=map_committer(commit['commit']['committer']),
+            )
+            if cc.returncode:
+                raise CherrypickError(commit_sha, cc.stdout.decode(), cc.stderr.decode(), commits)
 
-            msg = self._make_fp_message(commit)
+            head = cc.stdout.strip()
+            logger.info('%s -> %s', commit_sha, head)
 
-            # replace existing commit message with massaged one
-            configured \
-                .with_config(input=str(msg).encode())\
-                .commit(amend=True, file='-')
-            result = configured.stdout().rev_parse('HEAD').stdout.decode()
-            logger.info('%s: success -> %s', commit_sha, result)
+        return head
 
     def _make_fp_message(self, commit):
         cmap = json.loads(self.commits_map)
@@ -540,6 +509,11 @@ stderr:
                     token_field='fp_github_token',
                     format_args={'pr': pr, 'source': source},
                 )
+
+
+map_author = operator.itemgetter('name', 'email', 'date')
+map_committer = operator.itemgetter('name', 'email')
+
 
 class Stagings(models.Model):
     _inherit = 'runbot_merge.stagings'

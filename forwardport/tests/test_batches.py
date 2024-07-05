@@ -381,18 +381,13 @@ def test_add_to_forward_port_conflict(env, config, make_repo, users):
     assert pr2_c.comments == [
         seen(env, pr2_c, users),
         # should have conflicts
-        (users['user'], matches("""@{user} cherrypicking of pull request {previous.display_name} failed.
+        (users['user'], """@{user} cherrypicking of pull request {previous.display_name} failed.
 
 stdout:
 ```
 Auto-merging b
 CONFLICT (add/add): Merge conflict in b
 
-```
-
-stderr:
-```
-$$
 ```
 
 Either perform the forward-port manually (and push to this branch, proceeding as usual) or close this PR (maybe?).
@@ -402,5 +397,5 @@ In the former case, you may want to edit this PR message as well.
 :warning: after resolving this conflict, you will need to merge it via @{project.github_prefix}.
 
 More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
-""".format(project=project, previous=pr2_b_id, **users)))
+""".format(project=project, previous=pr2_b_id, **users))
     ]

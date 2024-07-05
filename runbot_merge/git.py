@@ -13,16 +13,21 @@ from .github import MergeError, PrCommit
 
 _logger = logging.getLogger(__name__)
 
-
-def source_url(repository, prefix: str) -> str:
+def source_url(repository) -> str:
     return 'https://{}@github.com/{}'.format(
-        repository.project_id[f'{prefix}_token'],
+        repository.project_id.github_token,
         repository.name,
+    )
+
+def fw_url(repository) -> str:
+    return 'https://{}@github.com/{}'.format(
+        repository.project_id.fp_github_token,
+        repository.fp_remote_target,
     )
 
 Authorship = Union[Tuple[str, str], Tuple[str, str, str]]
 
-def get_local(repository, prefix: Optional[str]) -> 'Optional[Repo]':
+def get_local(repository, *, clone: bool = True) -> 'Optional[Repo]':
     repos_dir = pathlib.Path(user_cache_dir('mergebot'))
     repos_dir.mkdir(parents=True, exist_ok=True)
     # NB: `repository.name` is `$org/$name` so this will be a subdirectory, probably
@@ -30,9 +35,9 @@ def get_local(repository, prefix: Optional[str]) -> 'Optional[Repo]':
 
     if repo_dir.is_dir():
         return git(repo_dir)
-    elif prefix:
+    elif clone:
         _logger.info("Cloning out %s to %s", repository.name, repo_dir)
-        subprocess.run(['git', 'clone', '--bare', source_url(repository, prefix), str(repo_dir)], check=True)
+        subprocess.run(['git', 'clone', '--bare', source_url(repository), str(repo_dir)], check=True)
         # bare repos don't have fetch specs by default, and fetching *into*
         # them is a pain in the ass, configure fetch specs so `git fetch`
         # works properly

@@ -62,17 +62,17 @@ def test_conflict(env, config, make_repo, users):
     assert prod.read_tree(c) == {
         'f': 'c',
         'g': 'a',
-        'h': matches('''<<<\x3c<<< HEAD
+        'h': matches('''<<<\x3c<<< $$
 a
-||||||| parent of $$ (temp)
+||||||| $$
 =======
 xxx
->>>\x3e>>> $$ (temp)
+>>>\x3e>>> $$
 '''),
     }
     assert prc.comments == [
         seen(env, prc, users),
-        (users['user'], matches(
+        (users['user'],
 f'''@{users['user']} @{users['reviewer']} cherrypicking of pull request {pra_id.display_name} failed.
 
 stdout:
@@ -82,11 +82,6 @@ CONFLICT (add/add): Merge conflict in h
 
 ```
 
-stderr:
-```
-$$
-```
-
 Either perform the forward-port manually (and push to this branch, proceeding as usual) or close this PR (maybe?).
 
 In the former case, you may want to edit this PR message as well.
@@ -94,7 +89,7 @@ In the former case, you may want to edit this PR message as well.
 :warning: after resolving this conflict, you will need to merge it via @{project.github_prefix}.
 
 More info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port
-'''))
+''')
     ]
 
     prb = prod.get_pr(prb_id.number)

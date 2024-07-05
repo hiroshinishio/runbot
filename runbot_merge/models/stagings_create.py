@@ -177,7 +177,7 @@ For-Commit-Id: {it.head}
         )
         it.repo.stdout(False).check(True).push(
             '-f',
-            git.source_url(repo, 'github'),
+            git.source_url(repo),
             f'{it.head}:refs/heads/staging.{branch.name}',
         )
 
@@ -231,9 +231,9 @@ def staging_setup(
         gh = repo.github()
         head = gh.head(target.name)
 
-        source = git.get_local(repo, 'github')
+        source = git.get_local(repo)
         source.fetch(
-            git.source_url(repo, 'github'),
+            git.source_url(repo),
             # a full refspec is necessary to ensure we actually fetch the ref
             # (not just the commit it points to) and update it.
             # `git fetch $remote $branch` seems to work locally, but it might

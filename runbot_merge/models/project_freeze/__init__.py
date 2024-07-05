@@ -213,15 +213,15 @@ class FreezeWizard(models.Model):
 
         gh_sessions = {r: r.github() for r in self.project_id.repo_ids}
         repos: Dict[Repository, git.Repo] = {
-            r: git.get_local(r, 'github').check(False)
+            r: git.get_local(r).check(False)
             for r in self.project_id.repo_ids
         }
         for repo, copy in repos.items():
-            copy.fetch(git.source_url(repo, 'github'), '+refs/heads/*:refs/heads/*')
+            copy.fetch(git.source_url(repo), '+refs/heads/*:refs/heads/*')
         all_prs = self.release_pr_ids.pr_id | self.bump_pr_ids.pr_id
         for pr in all_prs:
             repos[pr.repository].fetch(
-                git.source_url(pr.repository, 'github'),
+                git.source_url(pr.repository),
                 pr.head,
             )
 
@@ -282,7 +282,7 @@ class FreezeWizard(models.Model):
             repo_id = rel.repository_id
 
             if repos[repo_id].push(
-                git.source_url(repo_id, 'github'),
+                git.source_url(repo_id),
                 f'{rel_heads[repo_id]}:refs/heads/{self.branch_name}',
             ).returncode:
                 failure = ('create', repo_id.name, self.branch_name)
@@ -294,7 +294,7 @@ class FreezeWizard(models.Model):
             for bump in self.bump_pr_ids:
                 repo_id = bump.repository_id
                 if repos[repo_id].push(
-                    git.source_url(repo_id, 'github'),
+                    git.source_url(repo_id),
                     f'{bump_heads[repo_id]}:refs/heads/{master_name}'
                 ).returncode:
                     failure = ('fast-forward', repo_id.name, master_name)
@@ -310,7 +310,7 @@ class FreezeWizard(models.Model):
             for prev_id in to_revert:
                 if repos[prev_id].push(
                     '-f',
-                    git.source_url(prev_id, 'github'),
+                    git.source_url(prev_id),
                     f'{prevs[prev_id]}:refs/heads/{master_name}',
                 ).returncode:
                     failures.append(prev_id.name)
@@ -323,7 +323,7 @@ class FreezeWizard(models.Model):
 
             for prev_id in to_delete:
                 if repos[prev_id].push(
-                    git.source_url(prev_id, 'github'),
+                    git.source_url(prev_id),
                     f':refs/heads/{self.branch_name}'
                 ).returncode:
                     failures.append(prev_id.name)

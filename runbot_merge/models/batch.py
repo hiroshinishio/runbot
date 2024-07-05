@@ -13,7 +13,7 @@ from psycopg2 import sql
 
 from odoo import models, fields, api
 from .utils import enum
-
+from .. import git
 
 _logger = logging.getLogger(__name__)
 FOOTER = '\nMore info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port\n'
@@ -330,12 +330,11 @@ class Batch(models.Model):
             base64.urlsafe_b64encode(os.urandom(3)).decode()
         )
         conflicts = {}
-        with contextlib.ExitStack() as s:
-            for pr in prs:
-                conflicts[pr], working_copy = pr._create_fp_branch(
-                    target, new_branch, s)
+        for pr in prs:
+            repo = git.get_local(pr.repository)
+            conflicts[pr], head = pr._create_fp_branch(repo, target)
 
-                working_copy.push('target', new_branch)
+            repo.push(git.fw_url(pr.repository), f"{head}:refs/heads/{new_branch}")
 
         gh = requests.Session()
         gh.headers['Authorization'] = 'token %s' % proj.fp_github_token
