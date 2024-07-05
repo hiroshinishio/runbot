@@ -222,6 +222,7 @@ class Repo:
                 authorship['GIT_COMMITTER_DATE'] = committer[2]
 
         return self.with_config(
+            input=message,
             stdout=subprocess.PIPE,
             text=True,
             env={
@@ -235,7 +236,7 @@ class Repo:
         )._run(
             'commit-tree',
             tree,
-            '-m', message,
+            '-F', '-',
             *itertools.chain.from_iterable(('-p', p) for p in parents),
         )
 
