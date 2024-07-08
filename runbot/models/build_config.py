@@ -19,6 +19,18 @@ from odoo.tools.safe_eval import safe_eval, test_python_expr, _SAFE_OPCODES, to_
 # to simplify some python step by wraping the content in a function to allow return statement and get closer to other
 # steps
 
+
+# There is an issue in unidiff 0.7.3 fixed in 0.7.4
+# https://github.com/matiasb/python-unidiff/commit/a3faffc54e5aacaee3ded4565c534482d5cc3465
+# Since the unidiff packaged version in noble is 0.7.3
+# patching it looks like the easiest solution
+
+from unidiff import patch, VERSION
+if VERSION == '0.7.3':
+    patch.RE_DIFF_GIT_DELETED_FILE = re.compile(r'^deleted file mode \d+$')
+    patch.RE_DIFF_GIT_NEW_FILE = re.compile(r'^new file mode \d+$')
+
+
 _SAFE_OPCODES |= set(to_opcodes(['LOAD_DEREF', 'STORE_DEREF', 'LOAD_CLOSURE', 'MAKE_CELL', 'COPY_FREE_VARS']))
 
 _logger = logging.getLogger(__name__)
