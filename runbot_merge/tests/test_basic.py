@@ -1199,33 +1199,41 @@ class TestRetry:
         reviewer asks for it
         """
         with repo:
-            prx = _simple_init(repo)
-            repo.post_status(prx.head, 'success', 'ci/runbot')
-            repo.post_status(prx.head, 'success', 'legal/cla')
-            prx.post_comment('hansen r+ delegate=%s rebase-merge' % users['other'],
-                             config["role_reviewer"]['token'])
+            pr = _simple_init(repo)
+            repo.post_status(pr.head, 'success', 'ci/runbot')
+            repo.post_status(pr.head, 'success', 'legal/cla')
+            pr.post_comment(f'hansen r+ delegate={users["other"]} rebase-merge',
+                            config["role_reviewer"]['token'])
         env.run_crons()
-        assert env['runbot_merge.pull_requests'].search([
-            ('repository.name', '=', repo.name),
-            ('number', '=', prx.number)
-        ]).staging_id
+        pr_id = to_pr(env, pr)
+        assert pr_id.staging_id
 
         staging_head = repo.commit('heads/staging.master')
         with repo:
             repo.post_status('staging.master', 'success', 'legal/cla')
             repo.post_status('staging.master', 'failure', 'ci/runbot')
         env.run_crons()
-        assert env['runbot_merge.pull_requests'].search([
-            ('repository.name', '=', repo.name),
-            ('number', '=', prx.number)
-        ]).state == 'error'
+        assert pr_id.state == 'error'
 
         with repo:
-            prx.post_comment('hansen retry', config['role_' + retrier]['token'])
-        assert env['runbot_merge.pull_requests'].search([
-            ('repository.name', '=', repo.name),
-            ('number', '=', prx.number)
-        ]).state == 'ready'
+            pr.post_comment('hansen r+ rebase-ff', config["role_reviewer"]['token'])
+        env.run_crons()
+        assert pr_id.state == 'error'
+        assert pr.comments == [
+            (users['reviewer'], f'hansen r+ delegate={users["other"]} rebase-merge'),
+            seen(env, pr, users),
+            (users['user'], 'Merge method set to rebase and merge, using the PR as merge commit message.'),
+            (users['user'], '@{user} @{reviewer} staging failed: ci/runbot'.format_map(users)),
+            (users['reviewer'], 'hansen r+ rebase-ff'),
+            (users['user'], "This PR is already reviewed, it's in error, you might want to `retry` it instead "
+                            "(if you have already confirmed the error is not legitimate)."),
+            (users['user'], 'Merge method set to rebase and fast-forward.'),
+        ]
+        assert pr_id.merge_method == 'rebase-ff'
+
+        with repo:
+            pr.post_comment('hansen retry', config['role_' + retrier]['token'])
+        assert pr_id.state == 'ready'
         env.run_crons('runbot_merge.merge_cron', 'runbot_merge.staging_cron')
 
         staging_head2 = repo.commit('heads/staging.master')
@@ -1234,10 +1242,7 @@ class TestRetry:
             repo.post_status('staging.master', 'success', 'legal/cla')
             repo.post_status('staging.master', 'success', 'ci/runbot')
         env.run_crons()
-        assert env['runbot_merge.pull_requests'].search([
-            ('repository.name', '=', repo.name),
-            ('number', '=', prx.number)
-        ]).state == 'merged'
+        assert pr_id.state == 'merged'
 
     def test_retry_again_message(self, env, repo, users, config, page):
         """ For a retried PR, the error message on the PR's page should be the

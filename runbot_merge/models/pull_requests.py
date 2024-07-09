@@ -1052,10 +1052,15 @@ For your own safety I've ignored *everything in your entire comment*.
         if not newstate:
             # Don't fail the entire command if someone tries to approve an
             # already-approved PR.
+            if self.error:
+                msg = "This PR is already reviewed, it's in error, you might want to `retry` it instead " \
+                      "(if you have already confirmed the error is not legitimate)."
+            else:
+                msg = "This PR is already reviewed, reviewing it again is useless."
             self.env['runbot_merge.pull_requests.feedback'].create({
                 'repository': self.repository.id,
                 'pull_request': self.number,
-                'message': "This PR is already reviewed, reviewing it again is useless.",
+                'message': msg,
             })
             return None
 
