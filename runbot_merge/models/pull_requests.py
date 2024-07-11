@@ -16,13 +16,14 @@ from typing import Optional, Union, List, Iterator, Tuple
 import psycopg2
 import sentry_sdk
 import werkzeug
+from markupsafe import Markup
 
 from odoo import api, fields, models, tools, Command
 from odoo.exceptions import AccessError
 from odoo.osv import expression
 from odoo.tools import html_escape, Reverse
 from . import commands
-from .utils import enum, readonly
+from .utils import enum, readonly, dfm
 
 from .. import github, exceptions, controllers, utils
 
@@ -369,6 +370,7 @@ class PullRequests(models.Model):
     )
     refname = fields.Char(compute='_compute_refname')
     message = fields.Text(required=True)
+    message_html = fields.Html(compute='_compute_message_html', sanitize=False)
     draft = fields.Boolean(
         default=False, required=True, tracking=True,
         help="A draft PR can not be merged",
@@ -489,6 +491,20 @@ class PullRequests(models.Model):
     def _compute_message_title(self):
         for pr in self:
             pr.message_title = next(iter(pr.message.splitlines()), '')
+
+    @api.depends("message")
+    def _compute_message_html(self):
+        for pr in self:
+            match pr.message.split('\n\n', 1):
+                case [title]:
+                    pr.message_html = Markup('<h3>%s<h3>') % title
+                case [title, description]:
+                    pr.message_html = Markup('<h3>%s</h3>\n%s') % (
+                        title,
+                        dfm(pr.repository.name, description),
+                    )
+                case _:
+                    pr.message_html = ""
 
     @api.depends('repository.name', 'number', 'message')
     def _compute_display_name(self):

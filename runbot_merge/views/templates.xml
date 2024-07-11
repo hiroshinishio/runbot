@@ -446,7 +446,7 @@
                     <dd><a t-attf-href="{{pr.github_url}}/commits/{{pr.head}}"><span t-field="pr.head"/></a></dd>
                 </dl>
                 <t t-call="runbot_merge.dashboard-table"/>
-                <p t-field="pr.message"/>
+                <p t-field="pr.message_html"/>
             </div></div>
         </t>
     </template>
