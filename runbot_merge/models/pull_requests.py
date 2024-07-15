@@ -383,7 +383,7 @@ class PullRequests(models.Model):
     author = fields.Many2one('res.partner', index=True)
     head = fields.Char(required=True, tracking=True)
     label = fields.Char(
-        required=True, index=True,
+        required=True, index=True, tracking=True,
         help="Label of the source branch (owner:branchname), used for "
              "cross-repository branch-matching"
     )
