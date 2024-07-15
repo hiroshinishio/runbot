@@ -284,7 +284,13 @@ class Branch(models.Model):
             self._table, ['name', 'project_id'])
         return res
 
-    @api.depends('active')
+    def name_get(self):
+        return [
+            (id, f"{b.project_id.name}:{name}")
+            for b, (id, name) in zip(self, super().name_get())
+        ]
+
+    @api.depends('active', 'project_id.name')
     def _compute_display_name(self):
         super()._compute_display_name()
         for b in self.filtered(lambda b: not b.active):

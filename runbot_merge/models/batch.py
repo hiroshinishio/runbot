@@ -52,8 +52,9 @@ class Batch(models.Model):
     _description = "batch of pull request"
     _inherit = ['mail.thread']
     _parent_store = True
+    _order = "id desc"
 
-    name = fields.Char(compute="_compute_name")
+    name = fields.Char(compute="_compute_name", search="_search_name")
     target = fields.Many2one('runbot_merge.branch', store=True, compute='_compute_target')
     batch_staging_ids = fields.One2many('runbot_merge.staging.batch', 'runbot_merge_batch_id')
     staging_ids = fields.Many2many(
@@ -182,6 +183,9 @@ class Batch(models.Model):
     def _compute_name(self):
         for batch in self:
             batch.name = batch.prs[:1].label or batch.all_prs[:1].label
+
+    def _search_name(self, operator, value):
+        return [('all_prs.label', operator, value)]
 
     @api.depends("all_prs.target")
     def _compute_target(self):

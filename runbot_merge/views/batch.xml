@@ -1,4 +1,40 @@
 <odoo>
+    <record id="runbot_merge_action_batches" model="ir.actions.act_window">
+        <field name="name">Batches</field>
+        <field name="res_model">runbot_merge.batch</field>
+        <field name="view_mode">tree,form</field>
+    </record>
+
+    <record id="runbot_merge_batch_search" model="ir.ui.view">
+        <field name="name">batches search</field>
+        <field name="model">runbot_merge.batch</field>
+        <field name="arch" type="xml">
+            <search>
+                <filter name="all" domain="['|', ('active', '=', True), ('active', '=', False)]"/>
+                <filter name="inactive" domain="[('active', '=', False)]"/>
+
+                <field name="name"/>
+                <field name="target"/>
+                <field name="id"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="runbot_merge_batch_tree" model="ir.ui.view">
+        <field name="name">batches list</field>
+        <field name="model">runbot_merge.batch</field>
+        <field name="arch" type="xml">
+            <tree decoration-muted="not active">
+                <field name="id"/>
+                <field name="name"/>
+                <field name="target"/>
+                <field name="prs" widget="many2many_tags"/>
+                <field name="blocked"/>
+                <field name="active" invisible="1"/>
+            </tree>
+        </field>
+    </record>
+
     <record id="runbot_merge_batch_form" model="ir.ui.view">
         <field name="name">Batch form</field>
         <field name="model">runbot_merge.batch</field>

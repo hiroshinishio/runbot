@@ -88,9 +88,9 @@
                     name="open" string="Open"
                     domain="[('state', 'not in', ['merged', 'closed'])]"
                 />
+                <field name="label"/>
                 <field name="number"/>
                 <field name="author"/>
-                <field name="label"/>
                 <field name="target"/>
                 <field name="repository"/>
                 <field name="state"/>
@@ -416,17 +416,16 @@
         </field>
     </record>
 
-    <menuitem name="Mergebot" id="runbot_merge_menu"/>
-        <menuitem name="Projects" id="runbot_merge_menu_project"
-                  parent="runbot_merge_menu"
-                  action="runbot_merge_action_projects"/>
+    <menuitem name="Mergebot" id="runbot_merge_menu">
         <menuitem name="Pull Requests" id="runbot_merge_menu_prs"
-                  parent="runbot_merge_menu"
-                  action="runbot_merge_action_prs"/>
+                  action="runbot_merge_action_prs" sequence="5"/>
         <menuitem name="Stagings" id="runbot_merge_menu_stagings"
-                  parent="runbot_merge_menu"
-                  action="runbot_merge_action_stagings"/>
+                  action="runbot_merge_action_stagings" sequence="8"/>
+        <menuitem name="Projects" id="runbot_merge_menu_project"
+                  action="runbot_merge_action_projects"/>
+        <menuitem name="Batches" id="runbot_merge_menu_batches"
+                  action="runbot_merge_action_batches"/>
         <menuitem name="Commits" id="runbot_merge_menu_commits"
-                  parent="runbot_merge_menu"
                   action="runbot_merge_action_commits"/>
+    </menuitem>
 </odoo>
