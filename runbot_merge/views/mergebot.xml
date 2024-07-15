@@ -125,8 +125,10 @@
             <form>
                 <div class="o_form_statusbar">
                     <span class="o_statusbar_buttons">
-                    <field name="github_url" widget="url" class="btn btn-secondary" text="Github"/>
-                    <field name="url" widget="url" class="btn btn-secondary" text="Frontend"/></span>
+                        <button type="object" name="button_split" string="Split Off"/>
+                        <field name="github_url" widget="url" class="btn btn-secondary" text="Github"/>
+                        <field name="url" widget="url" class="btn btn-secondary" text="Frontend"/>
+                    </span>
                 </div>
                 <sheet>
                     <field name="project" invisible="1"/>
@@ -257,6 +259,20 @@
                     <field name="message_follower_ids" widget="mail_followers"/>
                     <field name="message_ids" widget="mail_thread"/>
                 </div>
+            </form>
+        </field>
+    </record>
+
+    <record id="runbot_merge_pull_requests_split_off_form" model="ir.ui.view">
+        <field name="name">Split Off Form</field>
+        <field name="model">runbot_merge.pull_requests.split_off</field>
+        <field name="arch" type="xml">
+            <form>
+                <field name="new_label" colspan="4"/>
+                <footer>
+                    <button type="object" name="button_apply" string="Apply" class="btn btn-primary"/>
+                    <button special="cancel" string="Cancel"  class="btn btn-secondary"/>
+                </footer>
             </form>
         </field>
     </record>

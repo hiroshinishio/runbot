@@ -1,6 +1,8 @@
 """This module tests edge cases specific to the batch objects themselves,
 without wider relevance and thus other location.
 """
+import pytest
+
 from utils import Commit, to_pr
 
 
@@ -79,7 +81,7 @@ def test_close_multiple(env, make_repo2):
     assert not batch_id.active
     assert Batches.search_count([]) == 0
 
-def test_inconsistent_target(env, project, make_repo2):
+def test_inconsistent_target(env, project, make_repo2, users):
     """If a batch's PRs have inconsistent targets,
 
     - only open PRs should count
@@ -87,6 +89,7 @@ def test_inconsistent_target(env, project, make_repo2):
     - the dash should not get hopelessly lost
     - there should be a wizard to split the batch / move a PR to a separate batch
     """
+    # region setup
     Batches = env['runbot_merge.batch']
     repo1 = make_repo2('whe')
     repo2 = make_repo2('whee')
@@ -98,6 +101,9 @@ def test_inconsistent_target(env, project, make_repo2):
         repo1.make_commits(None, Commit("a", tree={"a": "a"}), ref='heads/other')
         repo1.make_commits('master', Commit('b', tree={"b": "b"}), ref='heads/a_pr')
         pr1 = repo1.make_pr(head='a_pr', target='master')
+
+        repo1.make_commits('master', Commit('b', tree={"c": "c"}), ref='heads/something_else')
+        pr_other = repo1.make_pr(head='something_else', target='master')
 
     with repo2:
         repo2.make_commits(None, Commit("a", tree={"a": "a"}), ref='heads/master')
@@ -111,7 +117,13 @@ def test_inconsistent_target(env, project, make_repo2):
         repo3.make_commits('master', Commit('b', tree={"b": "b"}), ref='heads/a_pr')
         pr3 = repo3.make_pr(head='a_pr', target='master')
 
-    [b] = Batches.search([])
+    assert repo1.owner == repo2.owner == repo3.owner
+    owner = repo1.owner
+    # endregion
+
+    # region closeable consistency
+
+    [b] = Batches.search([('all_prs.label', '=', f'{owner}:a_pr')])
     assert b.target.name == 'master'
     assert len(b.prs) == 3
     assert len(b.all_prs) == 3
@@ -127,3 +139,28 @@ def test_inconsistent_target(env, project, make_repo2):
     assert b.target.name == 'master'
     assert len(b.prs) == 2
     assert len(b.all_prs) == 3
+    # endregion
+
+    # region split batch
+    with repo2:
+        pr2.base = 'other'
+    assert b.target.name == False
+    assert to_pr(env, pr_other).label == f'{owner}:something_else'
+    pr2_id = to_pr(env, pr2)
+    act = pr2_id.button_split()
+    assert act['type'] == 'ir.actions.act_window'
+    assert act['views'] == [[False, 'form']]
+    assert act['target'] == 'new'
+    w = env[act['res_model']].browse([act['res_id']])
+    w.new_label = f"{owner}:something_else"
+    with pytest.raises(Exception):
+        w.button_apply()
+    w.new_label = f"{owner}:blah-blah-blah"
+    w.button_apply()
+
+    assert pr2_id.label == f"{owner}:blah-blah-blah"
+    assert pr2_id.batch_id != to_pr(env, pr1).batch_id
+    assert b.target.name == 'master'
+    assert len(b.prs) == 1, "the PR has been moved off of this batch entirely"
+    assert len(b.all_prs) == 2
+    # endregion
