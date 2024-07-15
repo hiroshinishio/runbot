@@ -187,19 +187,11 @@ class Batch(models.Model):
     def _search_name(self, operator, value):
         return [('all_prs.label', operator, value)]
 
-    @api.depends("all_prs.target")
+    @api.depends("all_prs.target", "all_prs.closed")
     def _compute_target(self):
         for batch in self:
-            if len(batch.prs) == 1:
-                batch.target = batch.all_prs.target
-            else:
-                targets = set(batch.all_prs.mapped('target'))
-                if not targets:
-                    targets = set(batch.all_prs.mapped('target'))
-                if len(targets) == 1:
-                    batch.target = targets.pop()
-                else:
-                    batch.target = False
+            targets = batch.prs.mapped('target') or batch.all_prs.mapped('target')
+            batch.target = targets if len(targets) == 1 else False
 
     @api.depends(
         "merge_date",
