@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import select
+import shutil
 import threading
 from typing import Optional
 
@@ -306,7 +307,8 @@ class DbDict(dict):
                 self[module] = db
                 return db
 
-            d = atexit.enter_context(tempfile.TemporaryDirectory())
+            d = (self._shared_dir / f'shared-{module}')
+            d.mkdir()
             self[module] = db = 'template_%s' % uuid.uuid4()
             subprocess.run([
                 'odoo', '--no-http',
@@ -317,7 +319,7 @@ class DbDict(dict):
                 '--log-level', 'warn'
             ],
                 check=True,
-                env={**os.environ, 'XDG_DATA_HOME': d}
+                env={**os.environ, 'XDG_DATA_HOME': str(d)}
             )
             f.write(db)
             f.flush()
@@ -340,9 +342,18 @@ def dbcache(request, tmp_path_factory, addons_path):
     yield dbs
 
 @pytest.fixture
-def db(request, module, dbcache):
+def db(request, module, dbcache, tmpdir):
+    template_db = dbcache[module]
     rundb = str(uuid.uuid4())
-    subprocess.run(['createdb', '-T', dbcache[module], rundb], check=True)
+    subprocess.run(['createdb', '-T', template_db, rundb], check=True)
+    share = tmpdir.mkdir('share')
+    shutil.copytree(
+        str(dbcache._shared_dir / f'shared-{module}'),
+        str(share),
+        dirs_exist_ok=True,
+    )
+    (share / 'Odoo' / 'filestore' / template_db).rename(
+        share / 'Odoo' / 'filestore' / rundb)
 
     yield rundb
 
@@ -464,7 +475,7 @@ def server(request, db, port, module, addons_path, tmpdir):
         **os.environ,
         # stop putting garbage in the user dirs, and potentially creating conflicts
         # TODO: way to override this with macOS?
-        'XDG_DATA_HOME': str(tmpdir.mkdir('share')),
+        'XDG_DATA_HOME': str(tmpdir / 'share'),
         'XDG_CACHE_HOME': str(tmpdir.mkdir('cache')),
     })
     os.close(w)
