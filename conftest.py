@@ -375,12 +375,14 @@ def wait_for_server(db, port, proc, mod, timeout=120):
 
         try:
             uid = xmlrpc.client.ServerProxy(
-                'http://localhost:{}/xmlrpc/2/common'.format(port))\
-                .authenticate(db, 'admin', 'admin', {})
+                f'http://localhost:{port}/xmlrpc/2/common'
+            ).authenticate(db, 'admin', 'admin', {
+                'base_location': f"http://localhost:{port}",
+            })
             mods = xmlrpc.client.ServerProxy(
-                'http://localhost:{}/xmlrpc/2/object'.format(port))\
-                .execute_kw(
-                    db, uid, 'admin', 'ir.module.module', 'search_read', [
+                f'http://localhost:{port}/xmlrpc/2/object'
+            ).execute_kw(
+                db, uid, 'admin', 'ir.module.module', 'search_read', [
                     [('name', '=', mod)], ['state']
                 ])
             if mods and mods[0].get('state') == 'installed':
