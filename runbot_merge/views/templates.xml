@@ -488,10 +488,11 @@ action = (project, repos, branches, genealogy)
         <field name="model_id" ref="base.model_ir_qweb"/>
         <field name="code"><![CDATA[
 batches = {}
-for branch in branches:
-    # FIXME: batches with inconsistent targets?
+for branch in [*branches, branches.browse(())]:
     if genealogy:
         prs_batch = genealogy.filtered(lambda b: b.target == branch).all_prs
+        if not (branch or prs_batch):
+            continue
     else:
         prs_batch = pr
     for repo in repos:
@@ -546,7 +547,12 @@ action = batches
             'branches': branches,
             'genealogy': pre[3],
         })"/>
-        <table class="table table-bordered table-sm">
+        <div t-if="not pr.batch_id.target" class="alert alert-danger">
+<p>Inconsistent targets:</p>
+<ul><li t-foreach="pr.batch_id.prs" t-as="p">
+<a t-att-href="p.url"><t t-out="p.display_name"/></a> has target '<t t-out="p.target.name"/>'</li></ul>
+        </div>
+        <table t-else="" class="table table-bordered table-sm">
             <colgroup>
                 <col/>
                 <col t-foreach="repos" t-as="repo"
@@ -573,7 +579,7 @@ action = batches
                     }} {{
                         'inactive' if not branch.active else ''
                     }}">
-                    <td t-out="branch.name"/>
+                    <td t-out="branch.name or ''"/>
                     <t t-foreach="repos" t-as="repo">
                         <t t-set="ps" t-value="batches[repo, branch]"/>
                         <t t-set="stateclass" t-value="ps['state'] and 'table-'+ps['state']"/>

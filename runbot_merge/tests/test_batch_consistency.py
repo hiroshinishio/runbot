@@ -3,7 +3,7 @@ without wider relevance and thus other location.
 """
 import pytest
 
-from utils import Commit, to_pr
+from utils import Commit, to_pr, pr_page
 
 
 def test_close_single(env, repo):
@@ -81,7 +81,7 @@ def test_close_multiple(env, make_repo2):
     assert not batch_id.active
     assert Batches.search_count([]) == 0
 
-def test_inconsistent_target(env, project, make_repo2, users):
+def test_inconsistent_target(env, project, make_repo2, users, page):
     """If a batch's PRs have inconsistent targets,
 
     - only open PRs should count
@@ -142,11 +142,25 @@ def test_inconsistent_target(env, project, make_repo2, users):
     # endregion
 
     # region split batch
+    pr1_id = to_pr(env, pr1)
+    pr2_id = to_pr(env, pr2)
     with repo2:
         pr2.base = 'other'
+
+    pr2_dashboard = pr_page(page, pr2)
+    # The dashboard should have an alert
+    s = pr2_dashboard.cssselect('.alert.alert-danger')
+    assert s, "the dashboard should have an alert"
+    assert s[0].text_content().strip() == f"""\
+Inconsistent targets:
+
+{pr1_id.display_name} has target 'master'
+{pr2_id.display_name} has target 'other'\
+"""
+    assert not pr2_dashboard.cssselect('table'), "the batches table should be suppressed"
+
     assert b.target.name == False
     assert to_pr(env, pr_other).label == f'{owner}:something_else'
-    pr2_id = to_pr(env, pr2)
     act = pr2_id.button_split()
     assert act['type'] == 'ir.actions.act_window'
     assert act['views'] == [[False, 'form']]
