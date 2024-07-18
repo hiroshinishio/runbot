@@ -28,7 +28,9 @@
 
     <menuitem id="runbot_menu_upgrade_exceptions_tree" parent="runbot_menu_root" sequence="700" action="open_view_upgrade_exception_tree"/>
 
-    <menuitem name="Docker" id="menu_dockerfile" parent="runbot_menu_root" action="open_view_dockerfile_tree" sequence="800"/>
+    <menuitem name="Docker" id="menu_dockerfile" parent="runbot_menu_root" sequence="800"/>
+    <menuitem name="Docker files" id="menu_dockerfiles" parent="menu_dockerfile" action="open_view_dockerfile_tree" sequence="801"/>
+    <menuitem name="Docker build results" id="menu_docker_results" parent="menu_dockerfile" action="open_view_docker_result_tree" sequence="802"/>
 
     <menuitem name="Manage errors" id="runbot_menu_manage_errors" parent="runbot_menu_root" sequence="900"/>
     <menuitem name="Build errors" id="runbot_menu_build_error_tree" parent="runbot_menu_manage_errors" sequence="10" action="open_view_build_error_tree"/>

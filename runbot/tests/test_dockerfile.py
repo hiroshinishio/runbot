@@ -15,7 +15,7 @@ class TestDockerfile(RunbotCase, HttpCase):
     def test_dockerfile_base_fields(self):
         xml_content = """<t t-call="runbot.docker_base">
     <t t-set="custom_values" t-value="{
-      'from': 'ubuntu:focal',
+      'from': 'ubuntu:jammy',
       'phantom': True,
       'additional_pip': 'babel==2.8.0',
       'chrome_source': 'odoo',
@@ -38,7 +38,7 @@ class TestDockerfile(RunbotCase, HttpCase):
         })
 
         self.assertEqual(dockerfile.image_tag, 'odoo:TestsUbuntuFocal20.0Chrome86')
-        self.assertTrue(dockerfile.dockerfile.startswith('FROM ubuntu:focal'))
+        self.assertTrue(dockerfile.dockerfile.startswith('FROM ubuntu:jammy'))
         self.assertIn(' apt-get install -y -qq google-chrome-stable=86.0.4240.183-1', dockerfile.dockerfile)
         self.assertIn('# Install phantomjs', dockerfile.dockerfile)
         self.assertIn('pip install --no-cache-dir babel==2.8.0', dockerfile.dockerfile)

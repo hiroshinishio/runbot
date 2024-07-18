@@ -230,7 +230,7 @@ def prepare_stats_log(dest, previous_stats, current_stats):
     system_delta = (current_cpu_time - previous_cpu_time) / CPU_COUNT
     cpu_percent = cpu_delta / system_delta * 100
     cpu_percent_delta = (cpu_percent - logged_cpu_percent)
-    cpu_percent_ratio =  cpu_percent_delta / (logged_cpu_percent or 0.000001) * 100
+    cpu_percent_ratio = cpu_percent_delta / (logged_cpu_percent or 0.000001) * 100
 
     log_lines = []
     date_time = datetime.fromtimestamp(current_time).astimezone(tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S,%f')[:-3]

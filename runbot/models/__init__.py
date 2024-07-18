@@ -11,7 +11,7 @@ from . import codeowner
 from . import commit
 from . import custom_trigger
 from . import database
-from . import dockerfile
+from . import docker
 from . import host
 from . import ir_cron
 from . import ir_http

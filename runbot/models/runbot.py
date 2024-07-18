@@ -34,7 +34,7 @@ class Runbot(models.AbstractModel):
     def _root(self):
         """Return root directory of repository"""
         return os.path.abspath(os.sep.join([os.path.dirname(__file__), '../static']))
-    
+
     def _path(self, *path_parts):
         """Return the repo build path"""
         root = self.env['runbot.runbot']._root()

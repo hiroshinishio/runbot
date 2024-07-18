@@ -110,15 +110,17 @@ def _docker_build(build_dir, image_tag):
     """
     docker_client = docker.from_env()
     try:
-        docker_client.images.build(path=build_dir, tag=image_tag, rm=True)
+        docker_image, result_stream = docker_client.images.build(path=build_dir, tag=image_tag, rm=True)
+        result_stream = list(result_stream)
+        msg = ''.join([r.get('stream', '') for r in result_stream])
+        return docker_image, msg
     except docker.errors.APIError as e:
-        _logger.error('Build of image %s failed with this API error:', image_tag)
+        _logger.error('Build of image %s failed', image_tag)
         return (False, e.explanation)
     except docker.errors.BuildError as e:
-        _logger.error('Build of image %s failed with this BUILD error:', image_tag)
+        _logger.error('Build of image %s failed', image_tag)
         msg = f"{e.msg}\n{''.join(l.get('stream') or '' for l in e.build_log)}"
         return (False, msg)
-    return (True, None)
 
 
 def docker_run(*args, **kwargs):

@@ -143,19 +143,45 @@ class Host(models.Model):
             USER {user}
             ENV COVERAGE_FILE /data/build/.coverage
             """
+        content = dockerfile.dockerfile + docker_append
         with open(self.env['runbot.runbot']._path('docker', dockerfile.image_tag, 'Dockerfile'), 'w') as Dockerfile:
-            Dockerfile.write(dockerfile.dockerfile + docker_append)
+            Dockerfile.write(content)
 
-        docker_build_success, msg = docker_build(docker_build_path, dockerfile.image_tag)
-        if not docker_build_success:
-            dockerfile.to_build = False
-            dockerfile.message_post(body=f'Build failure:\n{msg}')
-            # self.env['runbot.runbot']._warning(f'Dockerfile build "{dockerfile.image_tag}" failed on host {self.name}')
-        else:
-            duration = time.time() - start
+        docker_build_identifier, msg = docker_build(docker_build_path, dockerfile.image_tag)
+        duration = time.time() - start
+        docker_build_result_values = {'dockerfile_id': dockerfile.id, 'output': msg, 'duration': duration, 'content': content, 'host_id': self.id}
+        duration = time.time() - start
+        if docker_build_identifier:
+            docker_build_result_values['result'] = 'success'
+            docker_build_result_values['identifier'] = docker_build_identifier.id
             if duration > 1:
                 _logger.info('Dockerfile %s finished build in %s', dockerfile.image_tag, duration)
-    
+        else:
+            docker_build_result_values['result'] = 'error'
+            dockerfile.to_build = False
+
+        should_save_result = not docker_build_identifier  # always save in case of failure
+        if not should_save_result:
+            # check previous result anyway
+            previous_result = self.env['runbot.docker_build_result'].search([
+                ('dockerfile_id', '=', dockerfile.id),
+                ('host_id', '=', self.id),
+            ], order='id desc', limit=1)
+            # identifier changed
+            if docker_build_identifier.id != previous_result.identifier:
+                should_save_result = True
+            if previous_result.output != docker_build_result_values['output']:  # to discuss
+                should_save_result = True
+            if previous_result.content != docker_build_result_values['content']:  # docker image changed
+                should_save_result = True
+
+        if should_save_result:
+            result = self.env['runbot.docker_build_result'].create(docker_build_result_values)
+            if not docker_build_identifier:
+                message = f'Build failure, check results for more info ({result.summary})'
+                dockerfile.message_post(body=message)
+                _logger.error(message)
+
     @ormcache()
     def _host_list(self):
         return {host.name: host.id for host in self.search([])}

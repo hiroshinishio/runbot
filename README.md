@@ -309,7 +309,7 @@ Runbot is using a Dockerfile Odoo model to define the Dockerfile used for builds
 
 The model is using Odoo QWeb views as templates.
 
-A new Dockerfile can be created as needed either by duplicating the default one and adapt parameters in the view. e.g.: changing the key `'from': 'ubuntu:bionic'` to `'from': 'debian:buster'` will create a new Dockerfile based on Debian instead of ubuntu.
+A new Dockerfile can be created as needed either by duplicating the default one and adapt parameters in the view. e.g.: changing the key `'from': 'ubuntu:jammy'` to `'from': 'debian:buster'` will create a new Dockerfile based on Debian instead of ubuntu.
 Or by providing a plain Dockerfile in the template.
 
 Once the Dockerfile is created and the `to_build` field is checked, the Dockerfile will be built (pay attention that no other operations will occur during the build).

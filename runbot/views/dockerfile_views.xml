@@ -41,6 +41,19 @@
                     </tree>
                   </field>
                 </page>
+                <page string="Build results">
+                  <field name="build_results">
+                    <tree>
+                      <field name="dockerfile_id"/>
+                      <field name="host_id"/>
+                      <field name="duration"/>
+                      <field name="result" decoration-bg-danger="result != 'success'" decoration-bg-success="result == 'success'"/>
+                      <field name="identifier"/>
+                      <field name="create_date"/>
+                      <field name="summary"/>
+                    </tree>
+                  </field>
+                </page>
               </notebook>
             </sheet>
             <div class="oe_chatter">
@@ -68,11 +81,59 @@
         </field>
     </record>
 
-    <record id="open_view_dockerfile_tree" model="ir.actions.act_window">
-        <field name="name">Dockerfiles</field>
-        <field name="res_model">runbot.dockerfile</field>
-        <field name="view_mode">tree,form</field>
+    <record id="docker_build_result_form" model="ir.ui.view">
+      <field name="name">runbot.docker_build_result.form</field>
+      <field name="model">runbot.docker_build_result</field>
+      <field name="arch" type="xml">
+        <form string="Docker build result">
+          <sheet>
+            <group>
+              <field name="dockerfile_id"/>
+              <field name="host_id"/>
+              <field name="duration"/>
+              <field name="result"/>
+              <field name="identifier"/>
+              <field name="summary"/>
+            </group>
+            <notebook>
+              <page string="Output">
+                <field name="output"/>
+              </page>
+              <page string="Content">
+                <field name="content"/>
+              </page>
+            </notebook>
+          </sheet>
+        </form>
+      </field>
     </record>
+
+    <record id="docker_build_result_tree" model="ir.ui.view">
+      <field name="name">runbot.docker_build_result.tree</field>
+      <field name="model">runbot.docker_build_result</field>
+      <field name="arch" type="xml">
+        <tree string="Docker build result">
+          <field name="dockerfile_id"/>
+          <field name="host_id"/>
+          <field name="duration"/>
+          <field name="result"/>
+          <field name="identifier"/>
+          <field name="summary"/>
+        </tree>
+      </field>
+    </record>
+
+  <record id="open_view_dockerfile_tree" model="ir.actions.act_window">
+    <field name="name">Dockerfiles</field>
+    <field name="res_model">runbot.dockerfile</field>
+    <field name="view_mode">tree,form</field>
+  </record>
+
+  <record id="open_view_docker_result_tree" model="ir.actions.act_window">
+    <field name="name">Docker build results</field>
+    <field name="res_model">runbot.docker_build_result</field>
+    <field name="view_mode">tree,form</field>
+  </record>
 
   </data>
 </odoo>
