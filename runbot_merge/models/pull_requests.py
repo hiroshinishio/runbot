@@ -19,7 +19,7 @@ import werkzeug
 from markupsafe import Markup
 
 from odoo import api, fields, models, tools, Command
-from odoo.exceptions import AccessError
+from odoo.exceptions import AccessError, UserError
 from odoo.osv import expression
 from odoo.tools import html_escape, Reverse
 from . import commands
@@ -318,6 +318,19 @@ class Branch(models.Model):
             b.active_staging_id = b.with_context(active_test=True).staging_ids
 
 
+class SplitOffWizard(models.TransientModel):
+    _name = "runbot_merge.pull_requests.split_off"
+    _description = "wizard to split a PR off of its current batch and into a different one"
+
+    pr_id = fields.Many2one("runbot_merge.pull_requests", required=True)
+    new_label = fields.Char(string="New Label")
+
+    def button_apply(self):
+        self.pr_id._split_off(self.new_label)
+        self.unlink()
+        return {'type': 'ir.actions.act_window_close'}
+
+
 ACL = collections.namedtuple('ACL', 'is_admin is_reviewer is_author')
 class PullRequests(models.Model):
     _name = 'runbot_merge.pull_requests'
@@ -370,7 +383,7 @@ class PullRequests(models.Model):
     author = fields.Many2one('res.partner', index=True)
     head = fields.Char(required=True, tracking=True)
     label = fields.Char(
-        required=True, index=True,
+        required=True, index=True, tracking=True,
         help="Label of the source branch (owner:branchname), used for "
              "cross-repository branch-matching"
     )
@@ -1604,6 +1617,37 @@ For your own safety I've ignored *everything in your entire comment*.
             token_field='fp_github_token',
             format_args=format_args,
         )
+
+    def button_split(self):
+        if len(self.batch_id.prs) == 1:
+            raise UserError("Splitting a batch with a single PR is dumb")
+
+        w = self.env['runbot_merge.pull_requests.split_off'].create({
+            'pr_id': self.id,
+            'new_label': self.label,
+        })
+        return {
+            'type': 'ir.actions.act_window',
+            'res_model': w._name,
+            'res_id': w.id,
+            'target': 'new',
+            'views': [(False, 'form')],
+        }
+
+    def _split_off(self, new_label):
+        # should not be usable to move a PR between batches (maybe later)
+        batch = self.env['runbot_merge.batch']
+        if not re.search(r':patch-\d+$', new_label):
+            if batch.search([
+                ('merge_date', '=', False),
+                ('prs.label', '=', new_label),
+            ]):
+                raise UserError("Can not split off to an existing batch")
+
+        self.write({
+            'label': new_label,
+            'batch_id': batch.create({}).id,
+        })
 
 # ordering is a bit unintuitive because the lowest sequence (and name)
 # is the last link of the fp chain, reasoning is a bit more natural the
