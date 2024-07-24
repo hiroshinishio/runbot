@@ -170,13 +170,6 @@ def raster_render(pr):
     if request.httprequest.headers.get('If-Modified-Since') == last_modified:
         return werkzeug.wrappers.Response(status=304, headers=headers)
 
-    with file_open('web/static/fonts/google/Open_Sans/Open_Sans-Regular.ttf', 'rb') as f:
-        font = ImageFont.truetype(f, size=16, layout_engine=0)
-        f.seek(0)
-        supfont = ImageFont.truetype(f, size=13, layout_engine=0)
-    with file_open('web/static/fonts/google/Open_Sans/Open_Sans-Bold.ttf', 'rb') as f:
-        bold = ImageFont.truetype(f, size=16, layout_engine=0)
-
     batches = pr.env.ref('runbot_merge.dashboard-prep')._run_action_code_multi({
         'pr': pr,
         'repos': repos,
@@ -184,31 +177,48 @@ def raster_render(pr):
         'genealogy': genealogy,
     })
 
-    # getbbox returns (left, top, right, bottom)
-
-    rows = {b: font.getbbox(b.name)[3] for b in branches}
-    rows[None] = max(bold.getbbox(r.name)[3] for r in repos)
-
-    columns = {r: bold.getbbox(r.name)[2] for r in repos}
-    columns[None] = max(font.getbbox(b.name)[2] for b in branches)
-
-    etag = hashlib.sha256(f"(P){pr.id},{pr.repository.id},{pr.target.id}".encode())
+    etag = hashlib.sha256(f"(P){pr.id},{pr.repository.id},{pr.target.id},{pr.batch_id.blocked}".encode())
     # repos and branches should be in a consistent order so can just hash that
     etag.update(''.join(f'(R){r.name}' for r in repos).encode())
     etag.update(''.join(f'(T){b.name},{b.active}' for b in branches).encode())
     # and product of deterministic iterations should be deterministic
     for r, b in product(repos, branches):
         ps = batches[r, b]
-        etag.update(f"(B){ps['state']},{ps['detached']},{ps['active']}".encode())
-        # technically label (state + blocked) does not actually impact image
-        # render (though subcomponents of state do) however blocked is useful
-        # to force an etag miss so keeping it
 
+        etag.update(f"(B){ps['state']},{ps['detached']},{ps['active']}".encode())
         etag.update(''.join(
             f"(PS){p['label']},{p['closed']},{p['number']},{p['checked']},{p['reviewed']},{p['attached']},{p['pr'].staging_id.id}"
             for p in ps['prs']
         ).encode())
 
+    etag = headers['ETag'] = base64.b32encode(etag.digest()).decode()
+    if if_none_match == etag:
+        return werkzeug.wrappers.Response(status=304, headers=headers)
+
+    if not pr.batch_id.target:
+        im = render_inconsistent_batch(pr.batch_id)
+    else:
+        im = render_full_table(pr, branches, repos, batches)
+
+    buffer = io.BytesIO()
+    im.save(buffer, 'png', optimize=True)
+    return werkzeug.wrappers.Response(buffer.getvalue(), headers=headers)
+
+
+def render_full_table(pr, branches, repos, batches):
+    with file_open('web/static/fonts/google/Open_Sans/Open_Sans-Regular.ttf', 'rb') as f:
+        font = ImageFont.truetype(f, size=16, layout_engine=0)
+        f.seek(0)
+        supfont = ImageFont.truetype(f, size=13, layout_engine=0)
+    with file_open('web/static/fonts/google/Open_Sans/Open_Sans-Bold.ttf', 'rb') as f:
+        bold = ImageFont.truetype(f, size=16, layout_engine=0)
+    # getbbox returns (left, top, right, bottom)
+    rows = {b: font.getbbox(b.name)[3] for b in branches}
+    rows[None] = max(bold.getbbox(r.name)[3] for r in repos)
+    columns = {r: bold.getbbox(r.name)[2] for r in repos}
+    columns[None] = max(font.getbbox(b.name)[2] for b in branches)
+    for r, b in product(repos, branches):
+        ps = batches[r, b]
         w = h = 0
         for p in ps['prs']:
             _, _, ww, hh = font.getbbox(f" #{p['number']}")
@@ -223,17 +233,12 @@ def raster_render(pr):
         rows[b] = max(rows.get(b, 0), h)
         columns[r] = max(columns.get(r, 0), w)
 
-    etag = headers['ETag'] = base64.b32encode(etag.digest()).decode()
-    if if_none_match == etag:
-        return werkzeug.wrappers.Response(status=304, headers=headers)
-
     pad_w, pad_h = 20, 5
     image_height = sum(rows.values()) + 2 * pad_h * len(rows)
     image_width = sum(columns.values()) + 2 * pad_w * len(columns)
     im = Image.new("RGB", (image_width+1, image_height+1), color='white')
     draw = ImageDraw.Draw(im, 'RGB')
     draw.font = font
-
     # for reasons of that being more convenient we store the bottom of the
     # current row, so getting the top edge requires subtracting h
     w = left = bottom = 0
@@ -244,12 +249,12 @@ def raster_render(pr):
         background = BG['info'] if b == pr.target or r == pr.repository else BG[None]
         w, h = columns[r] + 2 * pad_w, rows[b] + 2 * pad_h
 
-        if r is None: # branch cell in row
+        if r is None:  # branch cell in row
             left = 0
             bottom += h
             if b:
                 draw.rectangle(
-                    (left + 1, bottom - h + 1, left+w - 1, bottom - 1),
+                    (left + 1, bottom - h + 1, left + w - 1, bottom - 1),
                     background,
                 )
                 draw.text(
@@ -257,14 +262,14 @@ def raster_render(pr):
                     b.name,
                     fill=blend(TEXT, opacity, over=background),
                 )
-        elif b is None: # repo cell in top row
-            draw.rectangle((left + 1, bottom - h + 1, left+w - 1, bottom - 1), background)
+        elif b is None:  # repo cell in top row
+            draw.rectangle((left + 1, bottom - h + 1, left + w - 1, bottom - 1), background)
             draw.text((left + pad_w, bottom - h + pad_h), r.name, fill=TEXT, font=bold)
         # draw the bottom-right edges of the cell
         draw.line([
-            (left, bottom), # bottom-left
-            (left + w, bottom), # bottom-right
-            (left+w, bottom-h) # top-right
+            (left, bottom),  # bottom-left
+            (left + w, bottom),  # bottom-right
+            (left + w, bottom - h)  # top-right
         ], fill=(172, 176, 170))
         if r is None or b is None:
             continue
@@ -275,7 +280,7 @@ def raster_render(pr):
         if pr in ps['pr_ids']:
             bgcolor = lighten(bgcolor, by=-0.05)
         background = blend(bgcolor, opacity, over=background)
-        draw.rectangle((left + 1, bottom - h + 1, left+w - 1, bottom - 1), background)
+        draw.rectangle((left + 1, bottom - h + 1, left + w - 1, bottom - 1), background)
 
         top = bottom - h + pad_h
         offset = left + pad_w
@@ -286,13 +291,13 @@ def raster_render(pr):
             x, _, ww, hh = font.getbbox(label)
             if p['closed']:
                 draw.line([
-                    (offset+x, top + hh - hh/3),
-                    (offset+x+ww, top + hh - hh/3),
+                    (offset + x, top + hh - hh / 3),
+                    (offset + x + ww, top + hh - hh / 3),
                 ], fill=foreground)
             offset += ww
             if not p['attached']:
                 # overdraw top border to mark the detachment
-                draw.line([(left, bottom-h), (left+w, bottom-h)], fill=ERROR)
+                draw.line([(left, bottom - h), (left + w, bottom - h)], fill=ERROR)
             for attribute in filter(None, [
                 'error' if p['pr'].error else '',
                 '' if p['checked'] else 'missing statuses',
@@ -300,17 +305,43 @@ def raster_render(pr):
                 '' if p['attached'] else 'detached',
                 'staged' if p['pr'].staging_id else 'ready' if p['pr']._ready else ''
             ]):
-                label = f' {attribute}'
                 color = SUCCESS if attribute in ('staged', 'ready') else ERROR
+                label = f' {attribute}'
                 draw.text((offset, top), label,
                           fill=blend(color, opacity, over=background),
                           font=supfont)
                 offset += supfont.getbbox(label)[2]
             offset += math.ceil(supfont.getlength(" "))
 
-    buffer = io.BytesIO()
-    im.save(buffer, 'png', optimize=True)
-    return werkzeug.wrappers.Response(buffer.getvalue(), headers=headers)
+    return im
+
+
+def render_inconsistent_batch(batch):
+    """If a batch has inconsistent targets, just point out the inconsistency by
+    listing the PR and targets
+    """
+    with file_open('web/static/fonts/google/Open_Sans/Open_Sans-Regular.ttf', 'rb') as f:
+        font = ImageFont.truetype(f, size=16, layout_engine=0)
+
+    im = Image.new("RGB", (4000, 4000), color=BG['danger'])
+    w = h = 0
+    def draw(label, draw=ImageDraw.Draw(im)):
+        nonlocal w, h
+
+        draw.text((0, h), label, fill=blend(ERROR, 1.0, over=BG['danger']), font=font)
+
+        _, _, ww, hh = font.getbbox(label)
+        w = max(w, ww)
+        h += hh
+
+    draw(" Inconsistent targets:")
+    for p in batch.prs:
+        draw(f" • {p.display_name} has target '{p.target.name}'")
+    draw(" To resolve, either retarget or close the mis-targeted pull request(s).")
+
+    return im.crop((0, 0, w+10, h+5))
+
+
 
 Color = Tuple[int, int, int]
 TEXT: Color = (102, 102, 102)
@@ -322,6 +353,15 @@ BG: Mapping[str | None, Color] = collections.defaultdict(lambda: (255, 255, 255)
     'warning': (252, 248, 227),
     'danger': (242, 222, 222),
 })
+
+
+CHECK_MARK = "\uf00c"
+CROSS = "\uf00d"
+BOX_EMPTY = "\uf096"
+DARK_BOX = "\uf0c8"
+DARK_CHECK = "\uf14a"
+
+
 def blend_single(c: int, over: int, opacity: float) -> int:
     return round(over * (1 - opacity) + c * opacity)
 
