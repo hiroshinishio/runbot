@@ -95,7 +95,7 @@ class Batch(models.Model):
         column_type=enum(_name, 'priority'),
     )
 
-    blocked = fields.Char(store=True, compute="_compute_stageable")
+    blocked = fields.Char(store=True, compute="_compute_blocked")
 
     # unlike on PRs, this does not get detached... ? (because batches can be
     # partially detached so that's a PR-level concern)
@@ -199,12 +199,14 @@ class Batch(models.Model):
         "skipchecks",
         "prs.status", "prs.reviewed_by", "prs.target",
     )
-    def _compute_stageable(self):
+    def _compute_blocked(self):
         for batch in self:
             if batch.merge_date:
                 batch.blocked = "Merged."
             elif not batch.active:
                 batch.blocked = "all prs are closed"
+            elif len(targets := batch.prs.mapped('target')) > 1:
+                batch.blocked = f"Multiple target branches: {', '.join(targets.mapped('name'))!r}"
             elif blocking := batch.prs.filtered(
                 lambda p: p.error or p.draft or not (p.squash or p.merge_method)
             ):
@@ -220,8 +222,6 @@ class Batch(models.Model):
                     unvalidated and f"{unvalidated} are waiting for CI",
                     failed and f"{failed} have failed CI",
                 ]))
-            elif len(targets := batch.prs.mapped('target')) > 1:
-                batch.blocked = f"Multiple target branches: {', '.join(targets.mapped('name'))!r}"
             else:
                 if batch.blocked and batch.cancel_staging:
                     if splits := batch.target.split_ids:
