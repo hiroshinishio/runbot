@@ -2,8 +2,196 @@
 <odoo>
     <record model="runbot.dockerfile" id="runbot.docker_default">
         <field name="name">Docker Default</field>
-        <field name="template_id" ref="runbot.docker_base"/>
         <field name="to_build">True</field>
         <field name="description">Default Dockerfile for latest Odoo versions.</field>
+    </record>
+
+    <record id="runbot.docker_layer_debian_packages_template" model="runbot.docker_layer">
+        <field name="sequence" eval="-1"/>
+        <field name="layer_type">template</field>
+        <field name="name">Install debian packages</field>
+        <field name="values" eval="{}"></field>
+        <field name="content">RUN set -x ; \
+    apt-get update \
+    &amp;&amp; DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends {$packages} \
+    &amp;&amp; rm -rf /var/lib/apt/lists/*</field>
+    </record>
+
+    <record id="runbot.docker_layer_pip_packages_template" model="runbot.docker_layer">
+        <field name="sequence" eval="-1"/>
+        <field name="layer_type">template</field>
+        <field name="name">Install pip packages</field>
+        <field name="values">{}</field>
+        <field name="content">RUN python3 -m pip install --no-cache-dir {$packages}</field>
+    </record>
+
+    <record id="runbot.docker_layer_create_user_template" model="runbot.docker_layer">
+        <field name="sequence" eval="-1"/>
+        <field name="layer_type">template</field>
+        <field name="name">Create user template</field>
+        <field name="values">{"USERUID":"/missing/", "USERNAME":"/missing/", "USERUID":"/missing/"}</field>
+        <field name="content">RUN groupadd -g {USERGID} {USERNAME} &amp;&amp; useradd --create-home -u {USERUID} -g {USERNAME} -G audio,video {USERNAME}</field>
+    </record>
+
+    <record id="runbot.docker_layer_from" model="runbot.docker_layer">
+        <field name="sequence" eval="0"/>
+        <field name="dockerfile_id" ref="runbot.docker_default"/>
+        <field name="layer_type">raw</field>
+        <field name="name">FROM ubuntu:jammy</field>
+        <field name="content">FROM ubuntu:jammy</field>
+    </record>
+
+    <record id="runbot.docker_layer_lang" model="runbot.docker_layer">
+        <field name="sequence" eval="10"/>
+        <field name="dockerfile_id" ref="runbot.docker_default"/>
+        <field name="layer_type">raw</field>
+        <field name="name">ENV LANG C.UTF-8</field>
+        <field name="content">ENV LANG C.UTF-8</field>
+    </record>
+
+    <record id="runbot.docker_layer_root_user" model="runbot.docker_layer">
+        <field name="sequence" eval="20"/>
+        <field name="dockerfile_id" ref="runbot.docker_default"/>
+        <field name="layer_type">raw</field>
+        <field name="name">USER root</field>
+        <field name="content">USER root</field>
+    </record>
+
+    <record id="runbot.docker_layer_deb" model="runbot.docker_layer">
+        <field name="sequence" eval="30"/>
+        <field name="dockerfile_id" ref="runbot.docker_default"/>
+        <field name="layer_type">reference_layer</field>
+        <field name="name">Install base debian packages</field>
+        <field name="packages">apt-transport-https build-essential ca-certificates curl ffmpeg file flake8 fonts-freefont-ttf fonts-noto-cjk gawk gnupg gsfonts libldap2-dev libjpeg9-dev libsasl2-dev libxslt1-dev lsb-release ocrmypdf sed sudo unzip xfonts-75dpi zip zlib1g-dev</field>
+        <field name="reference_docker_layer_id" ref="runbot.docker_layer_debian_packages_template"/>
+    </record>
+
+    <record id="runbot.docker_layer_pydebs" model="runbot.docker_layer">
+        <field name="sequence" eval="40"/>
+        <field name="dockerfile_id" ref="runbot.docker_default"/>
+        <field name="layer_type">reference_layer</field>
+        <field name="name">Install python debian packages</field>
+        <field name="packages">python3 python3-dbfread python3-dev python3-gevent python3-pip python3-setuptools python3-wheel python3-markdown python3-mock python3-phonenumbers python3-websocket python3-google-auth libpq-dev python3-asn1crypto python3-jwt publicsuffix python3-xmlsec python3-aiosmtpd pylint</field>
+        <field name="reference_docker_layer_id" ref="runbot.docker_layer_debian_packages_template"/>
+    </record>
+
+    <record id="runbot.docker_layer_wkhtml" model="runbot.docker_layer">
+        <field name="sequence" eval="50"/>
+        <field name="dockerfile_id" ref="runbot.docker_default"/>
+        <field name="layer_type">raw</field>
+        <field name="name">Wkhtmltopdf</field>
+        <field name="content"># Install wkhtmltopdf
+RUN curl -sSL https://nightly.odoo.com/deb/jammy/wkhtmltox_0.12.5-2.jammy_amd64.deb -o /tmp/wkhtml.deb \
+    &amp;&amp; apt-get update \
+    &amp;&amp; DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends --fix-missing -qq /tmp/wkhtml.deb \
+    &amp;&amp; rm -rf /var/lib/apt/lists/* \
+    &amp;&amp; rm /tmp/wkhtml.deb</field>
+    </record>
+
+    <record id="runbot.docker_layer_nodejs" model="runbot.docker_layer">
+        <field name="sequence" eval="60"/>
+        <field name="dockerfile_id" ref="runbot.docker_default"/>
+        <field name="layer_type">template</field>
+        <field name="name">Install nodejs</field>
+        <field name="values" eval="{'node_version': '20'}"/>
+        <field name="content">RUN curl -s https://deb.nodesource.com/gpgkey/nodesource.gpg.key | gpg --dearmor | tee /usr/share/keyrings/nodesource.gpg &gt; /dev/null \
+    &amp;&amp; echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_{node_version}.x `lsb_release -c -s` main" &gt; /etc/apt/sources.list.d/nodesource.list \
+    &amp;&amp; apt-get update \
+    &amp;&amp; apt-get install -y nodejs</field>
+    </record>
+
+    <record id="runbot.docker_layer_npminstall" model="runbot.docker_layer">
+        <field name="sequence" eval="70"/>
+        <field name="dockerfile_id" ref="runbot.docker_default"/>
+        <field name="layer_type">raw</field>
+        <field name="name">RUN npm install</field>
+        <field name="content">RUN npm install -g rtlcss@3.4.0 es-check@6.0.0 eslint@8.1.0 prettier@2.7.1 eslint-config-prettier@8.5.0 eslint-plugin-prettier@4.2.1</field>
+    </record>
+
+    <record id="runbot.docker_layer_masterdebiancontroll" model="runbot.docker_layer">
+        <field name="sequence" eval="90"/>
+        <field name="dockerfile_id" ref="runbot.docker_default"/>
+        <field name="layer_type">template</field>
+        <field name="name">Install branch debian/control</field>
+        <field name="values" eval="{'odoo_branch': 'master'}"/>
+        <field name="content">ADD https://raw.githubusercontent.com/odoo/odoo/{odoo_branch}/debian/control /tmp/control.txt
+RUN apt-get update \
+    &amp;&amp; sed -n '/^Depends:/,/^[A-Z]/p' /tmp/control.txt \
+        | awk '/^ [a-z]/ { gsub(/,/,"") ; gsub(" ", "") ; print $NF }' | sort -u \
+        | egrep -v 'postgresql-client' \
+        | DEBIAN_FRONTEND=noninteractive xargs apt-get install -y -qq --no-install-recommends \
+    &amp;&amp; apt-get clean \
+    &amp;&amp; rm -rf /var/lib/apt/lists/*</field>
+    </record>
+
+    <record id="runbot.docker_layer_pip" model="runbot.docker_layer">
+        <field name="sequence" eval="100"/>
+        <field name="dockerfile_id" ref="runbot.docker_default"/>
+        <field name="layer_type">reference_layer</field>
+        <field name="name">Install base deps</field>
+        <field name="packages">astroid==2.4.2 pylint==2.5.0</field>
+        <field name="reference_docker_layer_id" ref="runbot.docker_layer_pip_packages_template"/>
+    </record>
+
+    <record id="runbot.docker_layer_external_dependencies_deps" model="runbot.docker_layer">
+        <field name="sequence" eval="110"/>
+        <field name="dockerfile_id" ref="runbot.docker_default"/>
+        <field name="layer_type">reference_layer</field>
+        <field name="name">Install external_dependencies deps</field>
+        <field name="packages">
+            ebaysdk==2.1.5  # no debian package but needed in odoo requirements
+            pdf417gen==0.7.1  # needed by l10n_cl_edi
+        </field>
+        <field name="reference_docker_layer_id" ref="runbot.docker_layer_pip_packages_template"/>
+    </record>
+
+    <record id="runbot.docker_layer_psqlclient" model="runbot.docker_layer">
+        <field name="sequence" eval="120"/>
+        <field name="dockerfile_id" ref="runbot.docker_default"/>
+        <field name="layer_type">raw</field>
+        <field name="name">Install postgresql client</field>
+        <field name="content">RUN curl -sSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add - \
+    &amp;&amp; echo "deb http://apt.postgresql.org/pub/repos/apt/ `lsb_release -s -c`-pgdg main" &gt; /etc/apt/sources.list.d/pgclient.list \
+    &amp;&amp; apt-get update \
+    &amp;&amp; DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql-client-14 \
+    &amp;&amp; rm -rf /var/lib/apt/lists/*</field>
+    </record>
+
+    <record id="runbot.docker_layer_chrome" model="runbot.docker_layer">
+        <field name="sequence" eval="130"/>
+        <field name="dockerfile_id" ref="runbot.docker_default"/>
+        <field name="layer_type">template</field>
+        <field name="name">Install chrome</field>
+        <field name="values" eval="{'chrome_version': '123.0.6312.58-1'}"/>
+        <field name="content">RUN curl -sSL https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_{chrome_version}_amd64.deb -o /tmp/chrome.deb \
+    &amp;&amp; apt-get update \
+    &amp;&amp; apt-get -y install --no-install-recommends /tmp/chrome.deb \
+    &amp;&amp; rm /tmp/chrome.deb</field>
+    </record>
+
+    <record id="runbot.docker_layer_branch_req" model="runbot.docker_layer">
+        <field name="sequence" eval="150"/>
+        <field name="dockerfile_id" ref="runbot.docker_default"/>
+        <field name="layer_type">template</field>
+        <field name="name">Install branch requirements</field>
+        <field name="values" eval="{'odoo_branch': 'master'}"/>
+        <field name="content">ADD https://raw.githubusercontent.com/odoo/odoo/{odoo_branch}/requirements.txt /tmp/requirements.txt
+RUN python3 -m pip install --no-cache-dir -r /tmp/requirements.txt</field>
+    </record>
+
+    <record id="runbot.docker_layer_create_user" model="runbot.docker_layer">
+        <field name="sequence" eval="160"/>
+        <field name="dockerfile_id" ref="runbot.docker_default"/>
+        <field name="layer_type">reference_layer</field>
+        <field name="name">Create user for docker default</field>
+        <field name="reference_docker_layer_id" ref="runbot.docker_layer_create_user_template"/>
+    </record>
+
+    <record id="runbot.docker_layer_switch_user" model="runbot.docker_layer">
+        <field name="sequence" eval="170"/>
+        <field name="dockerfile_id" ref="runbot.docker_default"/>
+        <field name="layer_type">template</field>
+        <field name="name">Switch user</field>
+        <field name="content">USER {USERNAME}</field>
     </record>
 </odoo>

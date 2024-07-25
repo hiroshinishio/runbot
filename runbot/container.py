@@ -9,6 +9,7 @@ When testing this file:
     The second parameter is the exposed port
 """
 import configparser
+import getpass
 import io
 import logging
 import os
@@ -28,6 +29,7 @@ with warnings.catch_warnings():
     )
     import docker
 
+USERNAME = getpass.getuser()
 
 _logger = logging.getLogger(__name__)
 docker_stop_failures = {}
@@ -198,7 +200,8 @@ def _docker_run(cmd=False, log_path=False, build_dir=False, container_name=False
         command=['/bin/bash', '-c',
                  f'exec &>> /data/buildlogs.txt ;{run_cmd}'],
         auto_remove=True,
-        detach=True
+        detach=True,
+        user=USERNAME,
     )
     if container.status not in ('running', 'created') :
         _logger.error('Container %s started but status is not running or created:  %s', container_name, container.status)

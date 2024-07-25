@@ -59,3 +59,12 @@ class TestVersion(RunbotCase):
 
         self.assertEqual(master.previous_major_version_id, v13)
         self.assertEqual(master.intermediate_version_ids, v133 | v132 | v131)
+
+    def test_version_docker_file(self):
+        version18 = self.env['runbot.version'].create({'name': '18.0'})
+        versionmaster = self.env['runbot.version'].search([('name', '=', 'master')])
+        self.assertEqual(version18.dockerfile_id, versionmaster.dockerfile_id)
+        versionmaster.dockerfile_id = self.env['runbot.dockerfile'].create({'name': 'New dockefile for master'})
+        version181 = self.env['runbot.version'].create({'name': '18.1'})
+        self.assertEqual(version181.dockerfile_id, versionmaster.dockerfile_id)
+        self.assertEqual(version181.dockerfile_id.name, 'New dockefile for master')

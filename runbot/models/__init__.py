@@ -15,6 +15,7 @@ from . import docker
 from . import host
 from . import ir_cron
 from . import ir_http
+from . import ir_model_fields_converter
 from . import ir_qweb
 from . import ir_logging
 from . import project

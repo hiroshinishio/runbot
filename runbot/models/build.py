@@ -39,6 +39,8 @@ COPY_WHITELIST = [
     "orphan_result",
 ]
 
+USERUID = os.getuid()
+USERNAME = getpass.getuser()
 
 def make_selection(array):
     return [(elem, elem.replace('_', ' ').capitalize()) if isinstance(elem, str) else elem for elem in array]
@@ -866,8 +868,7 @@ class BuildResult(models.Model):
         else:
             rc_content = starting_config
         self._write_file('.odoorc', rc_content)
-        user = getpass.getuser()
-        ro_volumes[f'/home/{user}/.odoorc'] = self._path('.odoorc')
+        ro_volumes[f'/home/{USERNAME}/.odoorc'] = self._path('.odoorc')
         kwargs.pop('build_dir', False)
         kwargs.pop('log_path', False)
         kwargs.pop('container_name', False)
@@ -1109,7 +1110,7 @@ class BuildResult(models.Model):
         command = Command(pres, cmd, posts, finals=finals, config_tuples=config_tuples, cmd_checker=build) 
 
         # use the username of the runbot host to connect to the databases
-        command.add_config_tuple('db_user', '%s' % pwd.getpwuid(os.getuid()).pw_name)
+        command.add_config_tuple('db_user', '%s' % pwd.getpwuid(USERUID).pw_name)
 
         if local_only:
             if grep(config_path, "--http-interface"):

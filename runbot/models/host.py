@@ -133,17 +133,8 @@ class Host(models.Model):
         docker_build_path = self.env['runbot.runbot']._path('docker', dockerfile.image_tag)
         os.makedirs(docker_build_path, exist_ok=True)
 
-        user = getpass.getuser()
+        content = dockerfile.dockerfile
 
-        docker_append = f"""
-            RUN groupadd -g {os.getgid()} {user} \\
-            && useradd -u {os.getuid()} -g {user} -G audio,video {user} \\
-            && mkdir /home/{user} \\
-            && chown -R {user}:{user} /home/{user}
-            USER {user}
-            ENV COVERAGE_FILE /data/build/.coverage
-            """
-        content = dockerfile.dockerfile + docker_append
         with open(self.env['runbot.runbot']._path('docker', dockerfile.image_tag, 'Dockerfile'), 'w') as Dockerfile:
             Dockerfile.write(content)
 

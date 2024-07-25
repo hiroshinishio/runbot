@@ -1,9 +1,109 @@
+import getpass
 import logging
+import os
 import re
-from odoo import models, fields, api
+
+from odoo import api, fields, models
 from odoo.addons.base.models.ir_qweb import QWebException
 
+from ..fields import JsonDictField
+
 _logger = logging.getLogger(__name__)
+
+
+USERUID = os.getuid()
+USERGID = os.getgid()
+USERNAME = getpass.getuser()
+
+class DockerLayer(models.Model):
+    _name = 'runbot.docker_layer'
+    _inherit = 'mail.thread'
+    _description = "Docker layer"
+    _order = 'sequence, id'
+
+    name = fields.Char("Name", required=True)
+    sequence = fields.Integer("Sequence", default=100)
+    dockerfile_id = fields.Many2one('runbot.dockerfile', index=True)
+    layer_type = fields.Selection([
+        ('raw', "Raw"),
+        ('template', "Template"),
+        ('reference_layer', "Reference layer"),
+        ('reference_file', "Reference file"),
+    ], string="Layer type", default='raw')
+    content = fields.Text("Content")
+    packages = fields.Text("Packages", help="List of package, can be on multiple lines with comments")
+    rendered = fields.Text("Rendered", compute="_compute_rendered", recursive=True)
+    reference_docker_layer_id = fields.Many2one('runbot.docker_layer', index=True)
+    reference_dockerfile_id = fields.Many2one('runbot.dockerfile', index=True)
+    values = JsonDictField()
+    referencing_dockerlayer_ids = fields.One2many('runbot.docker_layer', 'reference_docker_layer_id', string='Layers referencing this one direcly', readonly=True)
+    all_referencing_dockerlayer_ids = fields.One2many('runbot.docker_layer', compute="_compute_references", string='Layers referencing this one', readonly=True)
+    reference_count = fields.Integer('Number of references', compute='_compute_references')
+    has_xml_id = fields.Boolean(compute='_compute_has_xml_id', store=True)
+
+    @api.depends('referencing_dockerlayer_ids', 'dockerfile_id.referencing_dockerlayer_ids')
+    def _compute_references(self):
+        for record in self:
+            record.all_referencing_dockerlayer_ids = record.referencing_dockerlayer_ids | record.dockerfile_id.referencing_dockerlayer_ids
+            record.reference_count = len(record.all_referencing_dockerlayer_ids)
+
+    def _compute_has_xml_id(self):
+        existing_xml_id = set(self.env['ir.model.data'].search([('model', '=', self._name)]).mapped('res_id'))
+        for record in self:
+            record.has_xml_id = record.id and record.id in existing_xml_id
+
+    @api.depends('layer_type', 'content', 'reference_docker_layer_id.rendered', 'reference_dockerfile_id.layer_ids.rendered', 'values', 'packages', 'name')
+    def _compute_rendered(self):
+        for layer in self:
+            rendered = layer._render_layer({})
+            if not rendered or rendered[0] != '#':
+                rendered = f'# {layer.name}\n{rendered}'
+            layer.rendered = rendered
+
+    def _render_layer(self, custom_values):
+        base_values = {
+            'USERUID': USERUID,
+            'USERGID': USERGID,
+            'USERNAME': USERNAME,
+        }
+        if packages := self._parse_packages():
+            base_values['$packages'] = packages
+        values = {**base_values, **self.values, **custom_values}
+
+        if self.layer_type == 'raw':
+            return self.content
+        if self.layer_type == 'reference_layer':
+            return self.reference_docker_layer_id._render_layer(values)
+        if self.layer_type == 'reference_file':
+            return self.reference_dockerfile_id.layer_ids.render_layers(values)
+        if self.layer_type == 'template':
+            return self._render_template(values)
+
+    def render_layers(self, values=None):
+        values = values or {}
+        return "\n\n".join(layer._render_layer(values) or "" for layer in self) + '\n'
+
+    def _render_template(self, values):
+        values = {key: value for key, value in values.items() if f'{key}' in (self.content or '')}  # filter on keys mainly to have a nicer comment. All default must be defined in self.values
+        values_repr = str(values).replace("'", '"')
+        rendered = f"# {self.name or 'Rendering'} with values {values_repr}\n{self.content}"
+
+        for key, value in values.items():
+            rendered = rendered.replace('{%s}' % key, str(value))
+        return rendered
+
+    def _parse_packages(self):
+        packages = [packages.split('#')[0].strip() for packages in (self.packages or '').split('\n')]
+        packages = [package for package in packages if package]
+        return ' '.join(packages)
+
+    def unlink(self):
+        to_unlink = self
+        for record in self:
+            if record.reference_count and record.dockerfile_id:
+                record.dockerfile_id = False
+                to_unlink = to_unlink - record
+        return super(DockerLayer, to_unlink).unlink()
 
 
 class Dockerfile(models.Model):
@@ -24,6 +124,11 @@ class Dockerfile(models.Model):
     bundle_ids = fields.One2many('runbot.bundle', 'dockerfile_id', string='Used in Bundles')
     build_results = fields.One2many('runbot.docker_build_result', 'dockerfile_id', string='Build results')
     last_successful_result = fields.Many2one('runbot.docker_build_result', compute='_compute_last_successful_result')
+    layer_ids = fields.One2many('runbot.docker_layer', 'dockerfile_id', string='Layers')
+    referencing_dockerlayer_ids = fields.One2many('runbot.docker_layer', 'reference_dockerfile_id', string='Layers referencing this one')
+    use_count = fields.Integer('Used count', compute="_compute_use_count", store=True)
+    # maybe we should have global values here? branch version, chrome version, ... then use a os layer when possible (jammy, ...)
+    # we could also have a variant param, to use the version image in a specific trigger? Add a layer or change a param? 
 
     _sql_constraints = [('runbot_dockerfile_name_unique', 'unique(name)', 'A Dockerfile with this name already exists')]
 
@@ -39,14 +144,31 @@ class Dockerfile(models.Model):
         for record in self:
             record.last_successful_result = next((result for result in record.build_results if result.result == 'success'), record.build_results.browse())
 
-    @api.depends('template_id.arch_base')
+    @api.depends('bundle_ids', 'referencing_dockerlayer_ids', 'project_ids', 'version_ids')
+    def _compute_use_count(self):
+        for record in self:
+            record.use_count = len(record.bundle_ids) + len(record.referencing_dockerlayer_ids) + len(record.project_ids) + len(record.version_ids)
+
+    @api.depends('template_id.arch_base', 'layer_ids.rendered')
     def _compute_dockerfile(self):
         for rec in self:
-            try:
-                res = rec.template_id._render_template(rec.template_id.id) if rec.template_id else ''
-                rec.dockerfile = re.sub(r'^\s*$', '', res, flags=re.M).strip()
-            except QWebException:
-                rec.dockerfile = ''
+            content = ''
+            if rec.template_id:
+                try:
+                    res = rec.template_id._render_template(rec.template_id.id) if rec.template_id else ''
+                    dockerfile = re.sub(r'^\s*$', '', res, flags=re.M).strip()
+                    create_user = f"""\nRUN groupadd -g {USERGID} {USERNAME} && useradd --create-home -u {USERUID} -g {USERNAME} -G audio,video {USERNAME}\n"""
+                    content = dockerfile + create_user
+                except QWebException:
+                    content = ''
+            else:
+                content = rec.layer_ids.render_layers()
+
+            switch_user = f"\nUSER {USERNAME}\n"
+            if not content.endswith(switch_user):
+                content = content + switch_user
+
+            rec.dockerfile = content
 
     @api.depends('name')
     def _compute_image_tag(self):
@@ -59,6 +181,94 @@ class Dockerfile(models.Model):
         for rec in self:
             keys = re.findall(r'<t.+t-call="(.+)".+', rec.arch_base or '')
             rec.view_ids = self.env['ir.ui.view'].search([('type', '=', 'qweb'), ('key', 'in', keys)]).ids
+
+    def _template_to_layers(self):
+
+        ##
+        # Notes: This is working fine, but missing
+        # - debian packages layer (multiline),
+        # - setup tools and wheel pip (not usefull anymore? )
+        # - args goole chrome (maybe we should introduce that in the layers management instead of values?)
+        # - doc requirements
+        # - geo
+        ##
+        def clean_comments(text):
+            return '\n'.join([line for line in text.split('\n') if not line.startswith('#')])
+        env = self.env
+        base_layers = env['runbot.docker_layer'].browse(env['ir.model.data'].search([('model', '=', 'runbot.docker_layer')]).mapped('res_id'))
+        create_user_layer_id = env.ref('runbot.docker_layer_create_user_template').id
+        for rec in self:
+            if rec.template_id and not rec.layer_ids:
+                _logger.info('Converting %s in layers', rec.name)
+                layers = []
+                comments = []
+                previous_directive_add = False
+                content = rec.template_id._render_template(rec.template_id.id) 
+                for line in content.split('\n'):
+                    # should we consider all layers instead of base_layersbase_layers ?
+                    if not line.strip():
+                        continue
+
+                    if line.startswith('#'):
+                        comments.append(line)
+                        continue
+
+                    if any(line.startswith(directive) for directive in ['FROM', 'ENV', 'USER', 'SET', 'ADD', 'RUN', 'COPY', 'ARG']):
+                        if (previous_directive_add and line.startswith('RUN')):
+                            _logger.info('Keeping ADD in same layer than RUN')
+                        else:
+                            layers.append([])
+                        previous_directive_add = line.startswith('ADD')
+
+                    layers[-1] += comments
+                    comments = []
+                    layers[-1].append(line)
+
+                for layer in layers:
+                    content = '\n'.join(layer)
+                    values = {
+                            'dockerfile_id': rec.id,
+                            'name': f'{rec.name}: Migrated layer',
+                    }
+
+                    for base_layer in base_layers:
+                        if clean_comments(base_layer.rendered) == clean_comments(content):
+                            values['reference_docker_layer_id'] = base_layer.id
+                            values['layer_type'] = 'reference_layer'
+                            _logger.info('Matched existing layer')
+                            break
+                        if base_layer.layer_type == 'template':
+                            regex = re.escape(clean_comments(base_layer.content)).replace('"', r'\"')  # for astrange reason, re.escape does not escape "
+                            for key in base_layer.values:
+                                regex = regex.replace(r'\{%s\}' % key, fr'(?P<{key}>.*)', 1)
+                                regex = regex.replace(r'\{%s\}' % key, fr'.*')
+                            if match := re.match(regex, clean_comments(content)):
+                                new_values = {}
+                                _logger.info('Matched existing template')
+                                for key in base_layer.values:
+                                    new_values[key] = match.group(key)
+                                values['reference_docker_layer_id'] = base_layer.id
+                                values['values'] = new_values
+                                values['layer_type'] = 'reference_layer'
+                                break
+                    else:
+                        values['content'] = content
+                        values['layer_type'] = 'raw'
+                    self.env['runbot.docker_layer'].create(values)
+
+            # add finals user managementlayers
+            self.env['runbot.docker_layer'].create({
+                'dockerfile_id': rec.id,
+                'name': f'Create user for [{rec.name}]',
+                'layer_type': 'reference_layer',
+                'reference_docker_layer_id': create_user_layer_id,
+            })
+            self.env['runbot.docker_layer'].create({
+                'dockerfile_id': rec.id,
+                'name': f'Switch user for [{rec.name}]',
+                'layer_type': 'template',
+                'content': 'USER {USERNAME}',
+            })
 
 
 class DockerBuildOutput(models.Model):
@@ -74,12 +284,13 @@ class DockerBuildOutput(models.Model):
     content = fields.Text('Content')
     identifier = fields.Char('Identifier')
     summary = fields.Char("Summary", compute='_compute_summary', store=True)
+    metadata = JsonDictField("Metadata", help="Additionnal data about this image generated by nightly builds")
 
     @api.depends('output')
     def _compute_summary(self):
         for record in self:
             summary = ''
-            for line in reversed(self.output.split('\n')):
+            for line in reversed(record.output.split('\n')):
                 if len(line) > 5:
                     summary = line
                     break
