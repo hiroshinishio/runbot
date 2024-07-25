@@ -8,11 +8,14 @@ import hashlib
 import io
 import json
 import logging
-import math
 import pathlib
+from dataclasses import dataclass
 from email.utils import formatdate
+from enum import Flag, auto
+from functools import cached_property
 from itertools import chain, product
-from typing import Tuple, cast, Mapping
+from math import ceil
+from typing import Tuple, cast, Mapping, Optional, List
 
 import markdown
 import markupsafe
@@ -23,6 +26,8 @@ from PIL import Image, ImageDraw, ImageFont
 from odoo.http import Controller, route, request
 from odoo.tools import file_open
 
+HORIZONTAL_PADDING = 20
+VERTICAL_PADDING = 5
 
 _logger = logging.getLogger(__name__)
 
@@ -204,6 +209,83 @@ def raster_render(pr):
     im.save(buffer, 'png', optimize=True)
     return werkzeug.wrappers.Response(buffer.getvalue(), headers=headers)
 
+class Decoration(Flag):
+    STRIKETHROUGH = auto()
+
+@dataclass(frozen=True)
+class Text:
+    content: str
+    font: ImageFont.FreeTypeFont
+    color: Color
+    decoration: Decoration = Decoration(0)
+
+    @cached_property
+    def width(self) -> int:
+        return ceil(self.font.getlength(self.content))
+
+    @property
+    def height(self) -> int:
+        return sum(self.font.getmetrics())
+
+    def draw(self, image: ImageDraw.ImageDraw, left: int, top: int):
+        image.text((left, top), self.content, fill=self.color, font=self.font)
+        if Decoration.STRIKETHROUGH in self.decoration:
+            x1, _, x2, _ = self.font.getbbox(self.content)
+            _, y1, _, y2 = self.font.getbbox('x')
+            # put the strikethrough line about 1/3rd down the x (default seems
+            # to be a bit above halfway down but that's ugly with numbers which
+            # is most of our stuff)
+            y = top + y1 + (y2 - y1) / 3
+            image.line([(left + x1, y), (left + x2, y)], self.color)
+
+@dataclass(frozen=True)
+class Line:
+    spans: List[Text]
+
+    @property
+    def width(self) -> int:
+        return sum(s.width for s in self.spans)
+
+    @property
+    def height(self) -> int:
+        return max(s.height for s in self.spans) if self.spans else 0
+
+    def draw(self, image: ImageDraw.ImageDraw, left: int, top: int):
+        for span in self.spans:
+            span.draw(image, left, top)
+            left += span.width
+
+@dataclass(frozen=True)
+class Lines:
+    lines: List[Line]
+
+    @property
+    def width(self) -> int:
+        return max(l.width for l in self.lines)
+
+    @property
+    def height(self) -> int:
+        return sum(l.height for l in self.lines)
+
+    def draw(self, image: ImageDraw.ImageDraw, left: int, top: int):
+        for line in self.lines:
+            line.draw(image, left, top)
+            top += line.height
+
+@dataclass(frozen=True)
+class Cell:
+    content: Lines | Line | Text
+    background: Color = (255, 255, 255)
+    attached: bool = True
+
+    @cached_property
+    def width(self) -> int:
+        return self.content.width + 2 * HORIZONTAL_PADDING
+
+    @cached_property
+    def height(self) -> int:
+        return self.content.height + 2 * VERTICAL_PADDING
+
 
 def render_full_table(pr, branches, repos, batches):
     with file_open('web/static/fonts/google/Open_Sans/Open_Sans-Regular.ttf', 'rb') as f:
@@ -212,106 +294,84 @@ def render_full_table(pr, branches, repos, batches):
         supfont = ImageFont.truetype(f, size=13, layout_engine=0)
     with file_open('web/static/fonts/google/Open_Sans/Open_Sans-Bold.ttf', 'rb') as f:
         bold = ImageFont.truetype(f, size=16, layout_engine=0)
-    # getbbox returns (left, top, right, bottom)
-    rows = {b: font.getbbox(b.name)[3] for b in branches}
-    rows[None] = max(bold.getbbox(r.name)[3] for r in repos)
-    columns = {r: bold.getbbox(r.name)[2] for r in repos}
-    columns[None] = max(font.getbbox(b.name)[2] for b in branches)
-    for r, b in product(repos, branches):
-        ps = batches[r, b]
-        w = h = 0
-        for p in ps['prs']:
-            _, _, ww, hh = font.getbbox(f" #{p['number']}")
-            w += ww + supfont.getbbox(' '.join(filter(None, [
-                'error' if p['pr'].error else '',
-                '' if p['checked'] else 'missing statuses',
-                '' if p['reviewed'] else 'missing r+',
-                '' if p['attached'] else 'detached',
-                'staged' if p['pr'].staging_id else 'ready' if p['pr']._ready else '',
-            ])))[2]
-            h = max(hh, h)
-        rows[b] = max(rows.get(b, 0), h)
-        columns[r] = max(columns.get(r, 0), w)
 
-    pad_w, pad_h = 20, 5
-    image_height = sum(rows.values()) + 2 * pad_h * len(rows)
-    image_width = sum(columns.values()) + 2 * pad_w * len(columns)
-    im = Image.new("RGB", (image_width+1, image_height+1), color='white')
+    rowheights = collections.defaultdict(int)
+    colwidths = collections.defaultdict(int)
+    cells = {}
+    for b in chain([None], branches):
+        for r in chain([None], repos):
+            opacity = 1.0 if b is None or b.active else 0.5
+            current_row = b == pr.target
+            background = BG['info'] if current_row or r == pr.repository else BG[None]
+
+            if b is None: # first row
+                cell = Cell(Text("" if r is None else r.name, bold, TEXT), background)
+            elif r is None: # first column
+                cell = Cell(Text(b.name, font, blend(TEXT, opacity, over=background)), background)
+            else:
+                ps = batches[r, b]
+                bgcolor = lighten(BG[ps['state']], by=-0.05) if pr in ps['pr_ids'] else BG[ps['state']]
+                background = blend(bgcolor, opacity, over=background)
+                foreground = blend((39, 110, 114), opacity, over=background)
+
+                line = []
+                attached = True
+                for p in ps['prs']:
+                    line.append(Text(
+                        f"#{p['number']}",
+                        font,
+                        foreground,
+                        decoration=Decoration.STRIKETHROUGH if p['closed'] else Decoration(0),
+                    ))
+                    attached = attached and p['attached']
+                    for attribute in filter(None, [
+                        'error' if p['pr'].error else '',
+                        '' if p['checked'] else 'missing statuses',
+                        '' if p['reviewed'] else 'missing r+',
+                        '' if p['attached'] else 'detached',
+                        'staged' if p['pr'].staging_id else 'ready' if p['pr']._ready else ''
+                    ]):
+                        color = SUCCESS if attribute in ('staged', 'ready') else ERROR
+                        line.append(Text(f' {attribute}', supfont, blend(color, opacity, over=background)))
+                    line.append(Text(" ", font, foreground))
+                cell = Cell(Line(line), background, attached)
+
+            cells[r, b] = cell
+            rowheights[b] = max(rowheights[b], cell.height)
+            colwidths[r] = max(colwidths[r], cell.width)
+
+    im = Image.new("RGB", (sum(colwidths.values()), sum(rowheights.values())), "white")
+    # no need to set the font here because every text element has its own
     draw = ImageDraw.Draw(im, 'RGB')
-    draw.font = font
-    # for reasons of that being more convenient we store the bottom of the
-    # current row, so getting the top edge requires subtracting h
-    w = left = bottom = 0
-    for b, r in product(chain([None], branches), chain([None], repos)):
-        left += w
+    top = 0
+    for b in chain([None], branches):
+        left = 0
+        for r in chain([None], repos):
+            cell = cells[r, b]
 
-        opacity = 1.0 if b is None or b.active else 0.5
-        background = BG['info'] if b == pr.target or r == pr.repository else BG[None]
-        w, h = columns[r] + 2 * pad_w, rows[b] + 2 * pad_h
+            # for a given cell, we first print the background, then the text, then
+            # the borders
+            # need to subtract 1 because pillow uses inclusive rect coordinates
+            right = left + colwidths[r] - 1
+            bottom = top + rowheights[b] - 1
+            draw.rectangle(
+                (left, top, right, bottom),
+                cell.background,
+            )
+            # draw content adding padding
+            cell.content.draw(draw, left=left + HORIZONTAL_PADDING, top=top + VERTICAL_PADDING)
+            # draw bottom-right border
+            draw.line([
+                (left, bottom),
+                (right, bottom),
+                (right, top),
+            ], fill=(172, 176, 170))
+            if not cell.attached:
+                # overdraw previous cell's bottom border
+                draw.line([(left, top-1), (right-1, top-1)], fill=ERROR)
 
-        if r is None:  # branch cell in row
-            left = 0
-            bottom += h
-            if b:
-                draw.rectangle(
-                    (left + 1, bottom - h + 1, left + w - 1, bottom - 1),
-                    background,
-                )
-                draw.text(
-                    (left + pad_w, bottom - h + pad_h),
-                    b.name,
-                    fill=blend(TEXT, opacity, over=background),
-                )
-        elif b is None:  # repo cell in top row
-            draw.rectangle((left + 1, bottom - h + 1, left + w - 1, bottom - 1), background)
-            draw.text((left + pad_w, bottom - h + pad_h), r.name, fill=TEXT, font=bold)
-        # draw the bottom-right edges of the cell
-        draw.line([
-            (left, bottom),  # bottom-left
-            (left + w, bottom),  # bottom-right
-            (left + w, bottom - h)  # top-right
-        ], fill=(172, 176, 170))
-        if r is None or b is None:
-            continue
-
-        ps = batches[r, b]
-
-        bgcolor = BG[ps['state']]
-        if pr in ps['pr_ids']:
-            bgcolor = lighten(bgcolor, by=-0.05)
-        background = blend(bgcolor, opacity, over=background)
-        draw.rectangle((left + 1, bottom - h + 1, left + w - 1, bottom - 1), background)
-
-        top = bottom - h + pad_h
-        offset = left + pad_w
-        for p in ps['prs']:
-            label = f"#{p['number']}"
-            foreground = blend((39, 110, 114), opacity, over=background)
-            draw.text((offset, top), label, fill=foreground)
-            x, _, ww, hh = font.getbbox(label)
-            if p['closed']:
-                draw.line([
-                    (offset + x, top + hh - hh / 3),
-                    (offset + x + ww, top + hh - hh / 3),
-                ], fill=foreground)
-            offset += ww
-            if not p['attached']:
-                # overdraw top border to mark the detachment
-                draw.line([(left, bottom - h), (left + w, bottom - h)], fill=ERROR)
-            for attribute in filter(None, [
-                'error' if p['pr'].error else '',
-                '' if p['checked'] else 'missing statuses',
-                '' if p['reviewed'] else 'missing r+',
-                '' if p['attached'] else 'detached',
-                'staged' if p['pr'].staging_id else 'ready' if p['pr']._ready else ''
-            ]):
-                color = SUCCESS if attribute in ('staged', 'ready') else ERROR
-                label = f' {attribute}'
-                draw.text((offset, top), label,
-                          fill=blend(color, opacity, over=background),
-                          font=supfont)
-                offset += supfont.getbbox(label)[2]
-            offset += math.ceil(supfont.getlength(" "))
+            left += colwidths[r]
+        top += rowheights[b]
 
     return im
 
