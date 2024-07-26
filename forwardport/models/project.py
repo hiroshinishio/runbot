@@ -299,22 +299,23 @@ class PullRequests(models.Model):
             "Forward-porting %s (%s) to %s",
             self.display_name, root.display_name, target_branch.name
         )
-        tree = source.with_config(stdout=subprocess.PIPE, stderr=subprocess.STDOUT).fetch()
-        logger.info("Updated cache repo %s:\n%s", source._directory, tree.stdout.decode())
+        fetch = source.with_config(stdout=subprocess.PIPE, stderr=subprocess.STDOUT).fetch()
+        logger.info("Updated cache repo %s:\n%s", source._directory, fetch.stdout.decode())
 
-        tree = source.with_config(stdout=subprocess.PIPE, stderr=subprocess.STDOUT) \
+        head_fetch = source.with_config(stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False) \
             .fetch(git.source_url(self.repository), root.head)
-        logger.info(
-            "Fetched head of %s (%s):\n%s",
-            root.display_name,
-            root.head,
-            tree.stdout.decode()
-        )
-        if source.check(False).cat_file(e=root.head).returncode:
+        if head_fetch.returncode:
             raise ForwardPortError(
                 f"During forward port of {self.display_name}, unable to find "
                 f"expected head of {root.display_name} ({root.head})"
             )
+
+        logger.info(
+            "Fetched head of %s (%s):\n%s",
+            root.display_name,
+            root.head,
+            head_fetch.stdout.decode()
+        )
 
         try:
             return None, root._cherry_pick(source, target_branch.name)

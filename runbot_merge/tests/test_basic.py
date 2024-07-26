@@ -492,7 +492,6 @@ def test_staging_concurrent(env, repo, config):
     assert pr2.staging_id
 
 
-@pytest.mark.expect_log_errors(reason="staging merge conflicts are logged")
 def test_staging_conflict_first(env, repo, users, config, page):
     """ If the first batch of a staging triggers a conflict, the PR should be
     marked as in error
@@ -524,7 +523,6 @@ def test_staging_conflict_first(env, repo, users, config, page):
     assert dangerbox[0].text.strip() == 'Unable to stage PR'
 
 
-@pytest.mark.expect_log_errors(reason="merge conflicts are logged as errors")
 def test_staging_conflict_second(env, repo, users, config):
     """ If the non-first batch of a staging triggers a conflict, the PR should
     just be skipped: it might be a conflict with an other PR which could fail
@@ -648,7 +646,6 @@ def test_staging_ci_failure_single(env, repo, users, config, page):
     assert dangerbox[0].text == 'ci/runbot'
 
 
-@pytest.mark.expect_log_errors(reason="failed fast forward of staging is a logged error")
 def test_ff_failure(env, repo, config, page):
     """ target updated while the PR is being staged => redo staging """
     with repo:
@@ -695,7 +692,6 @@ def test_ff_failure(env, repo, config, page):
         "PR should be staged to a new commit"
 
 
-@pytest.mark.expect_log_errors(reason="blocking fast-forward of staging which triggers a logged error when trying to patch the GH ref")
 def test_ff_failure_batch(env, repo, users, config):
     with repo:
         m = repo.make_commit(None, 'initial', None, tree={'m': 'm'})
@@ -3615,7 +3611,6 @@ class TestRecognizeCommands:
             prx.post_comment('%shansen r+' % indent, config['role_reviewer']['token'])
         assert pr.state == 'approved'
 
-    @pytest.mark.expect_log_errors(reason="unknown commands are logged")
     def test_unknown_commands(self, repo, env, config, users):
         with repo:
             m = repo.make_commit(None, 'initial', None, tree={'m': 'm'})

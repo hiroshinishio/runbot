@@ -259,7 +259,8 @@ def stage_batches(branch: Branch, batches: Batch, staging_state: StagingState) -
             staged |= stage_batch(env, batch, staging_state)
         except exceptions.MergeError as e:
             pr = e.args[0]
-            _logger.info("Failed to stage %s into %s", pr.display_name, branch.name, exc_info=True)
+            _logger.info("Failed to stage %s into %s", pr.display_name, branch.name)
+            pr._message_log(body=f"Failed to stage into {branch.name}: {e}")
             if not staged or isinstance(e, exceptions.Unmergeable):
                 if len(e.args) > 1 and e.args[1]:
                     reason = e.args[1]
@@ -338,7 +339,8 @@ def stage_batch(env: api.Environment, batch: Batch, staging: StagingState):
                 list(format_for_difflib((n, v) for n, v, _ in e.args[1])),
                 list(format_for_difflib((n, v) for n, _, v in e.args[1])),
             ))
-            _logger.info("data mismatch on %s:\n%s", pr.display_name, diff)
+            _logger.info("Failed to stage %s: data mismatch", pr.display_name)
+            pr._message_log(body=f"data mismatch before merge:\n{diff}")
             env.ref('runbot_merge.pr.staging.mismatch')._send(
                 repository=pr.repository,
                 pull_request=pr.number,

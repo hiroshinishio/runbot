@@ -734,7 +734,6 @@ class PullRequests(models.Model):
                 e,
                 login, name,
                 utils.shorten(comment['body'] or '', 50),
-                exc_info=True
             )
             feedback(message=f"""@{login} {e.args[0]}.
 
@@ -2284,9 +2283,9 @@ class Stagings(models.Model):
                     self._safety_dance(gh, self.commits)
             except exceptions.FastForwardError as e:
                 logger.warning(
-                    "Could not fast-forward successful staging on %s:%s",
+                    "Could not fast-forward successful staging on %s:%s: %s",
                     e.args[0], self.target.name,
-                    exc_info=True
+                    e,
                 )
                 self.write({
                     'state': 'ff_failed',

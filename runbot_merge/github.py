@@ -253,7 +253,7 @@ class GH(object):
                 raise exceptions.FastForwardError(self._repo) \
                     from Exception("timeout: never saw %s" % sha)
         except requests.HTTPError as e:
-            _logger.debug('fast_forward(%s, %s, %s) -> ERROR', self._repo, branch, sha, exc_info=True)
+            _logger.debug('fast_forward(%s, %s, %s) -> %s', self._repo, branch, sha, e)
             if e.response.status_code == 422:
                 try:
                     r = e.response.json()
