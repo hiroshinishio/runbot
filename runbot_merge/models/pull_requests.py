@@ -831,6 +831,10 @@ For your own safety I've ignored *everything in your entire comment*.
                                 pull_request=self.number,
                                 format_args={'user': login, 'pr': self},
                             )
+                        if self.source_id:
+                            feedback("Note that only this forward-port has been"
+                                     " unapproved, sibling forward ports may "
+                                     "have to be unapproved individually.")
                         self.unstage("unreviewed (r-) by %s", login)
                     else:
                         msg = "r- makes no sense in the current PR state."

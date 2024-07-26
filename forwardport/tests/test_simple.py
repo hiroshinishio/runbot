@@ -553,6 +553,69 @@ def signoff(conf, message):
             return signoff
     raise AssertionError("Failed to find signoff by %s in %s" % (conf, message))
 
+def test_disapproval(env, config, make_repo, users):
+    """The author of a source PR should be able to unapprove the forward port in
+    case they approved it then noticed an issue of something.
+    """
+    # region setup
+    prod, _ = make_basic(env, config, make_repo, statuses='default')
+    env['res.partner'].create({
+        'name': users['other'],
+        'github_login': users['other'],
+        'email': 'other@example.org',
+    })
+
+    author_token = config['role_other']['token']
+    fork = prod.fork(token=author_token)
+    with prod, fork:
+        [c] = fork.make_commits('a', Commit('c_0', tree={'y': '0'}), ref='heads/accessrights')
+        pr0 = prod.make_pr(
+            target='a', title='my change',
+            head=users['other'] + ':accessrights',
+            token=author_token,
+        )
+        prod.post_status(c, 'success')
+        pr0.post_comment('hansen r+', token=config['role_reviewer']['token'])
+    env.run_crons()
+
+    with prod:
+        prod.post_status('staging.a', 'success')
+    env.run_crons()
+
+    pr0_id, pr1_id = env['runbot_merge.pull_requests'].search([], order='number')
+    assert pr1_id.source_id == pr0_id
+    pr1 = prod.get_pr(pr1_id.number)
+    assert pr0_id.state == 'merged'
+    with prod:
+        prod.post_status(pr1_id.head, 'success')
+    env.run_crons()
+    # endregion
+
+    _, _, pr2_id = env['runbot_merge.pull_requests'].search([], order='number')
+    pr2 = prod.get_pr(pr2_id.number)
+    with prod:
+        prod.post_status(pr2_id.head, 'success')
+        pr2.post_comment('hansen r+', token=config['role_other']['token'])
+    # no point creating staging for our needs, just propagate statuses
+    env.run_crons('runbot_merge.process_updated_commits')
+    assert pr1_id.state == 'ready'
+    assert pr2_id.state == 'ready'
+
+    # oh no, pr1 has an error!
+    with prod:
+        pr1.post_comment('hansen r-', token=config['role_other']['token'])
+    env.run_crons('runbot_merge.feedback_cron')
+    assert pr1_id.state == 'validated', "pr1 should not be approved anymore"
+    assert pr2_id.state == 'ready', "pr2 should not be affected"
+
+    assert pr1.comments == [
+        seen(env, pr1, users),
+        (users['user'], 'This PR targets b and is part of the forward-port chain. Further PRs will be created up to c.\n\nMore info at https://github.com/odoo/odoo/wiki/Mergebot#forward-port\n'),
+        (users['other'], "hansen r-"),
+        (users['user'], "Note that only this forward-port has been unapproved, "
+                        "sibling forward ports may have to be unapproved "
+                        "individually."),
+    ]
 
 def test_delegate_fw(env, config, make_repo, users):
     """If a user is delegated *on a forward port* they should be able to approve
