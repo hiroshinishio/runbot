@@ -239,8 +239,35 @@ class Text:
             image.line([(left + x1, y), (left + x2, y)], self.color)
 
 @dataclass(frozen=True)
+class Checkbox:
+    checked: Optional[bool]
+    font: ImageFont.FreeTypeFont
+    color: Color
+    success: Color
+    error: Color
+
+    @cached_property
+    def width(self) -> int:
+        return ceil(max(
+            self.font.getlength(BOX_EMPTY),
+            self.font.getlength(CHECK_MARK),
+            self.font.getlength(CROSS),
+        ))
+
+    @property
+    def height(self):
+        return sum(self.font.getmetrics())
+
+    def draw(self, image: ImageDraw.ImageDraw, left: int, top: int):
+        image.text((left, top+5), BOX_EMPTY, fill=self.color, font=self.font)
+        if self.checked is True:
+            image.text((left, top+4), CHECK_MARK, fill=self.success, font=self.font)
+        elif self.checked is False:
+            image.text((left, top+4), CROSS, fill=self.error, font=self.font)
+
+@dataclass(frozen=True)
 class Line:
-    spans: List[Text]
+    spans: List[Text | Checkbox | Lines]
 
     @property
     def width(self) -> int:
@@ -294,6 +321,8 @@ def render_full_table(pr, branches, repos, batches):
         supfont = ImageFont.truetype(f, size=13, layout_engine=0)
     with file_open('web/static/fonts/google/Open_Sans/Open_Sans-Bold.ttf', 'rb') as f:
         bold = ImageFont.truetype(f, size=16, layout_engine=0)
+    with file_open('web/static/lib/fontawesome/fonts/fontawesome-webfont.ttf', 'rb') as f:
+        icons = ImageFont.truetype(f, size=16, layout_engine=0)
 
     rowheights = collections.defaultdict(int)
     colwidths = collections.defaultdict(int)
@@ -308,6 +337,80 @@ def render_full_table(pr, branches, repos, batches):
                 cell = Cell(Text("" if r is None else r.name, bold, TEXT), background)
             elif r is None: # first column
                 cell = Cell(Text(b.name, font, blend(TEXT, opacity, over=background)), background)
+            elif current_row:
+                ps = batches[r, b]
+                bgcolor = lighten(BG[ps['state']], by=-0.05) if pr in ps['pr_ids'] else BG[ps['state']]
+                background = blend(bgcolor, opacity, over=background)
+                foreground = blend((39, 110, 114), opacity, over=background)
+                success = blend(SUCCESS, opacity, over=background)
+                error = blend(ERROR, opacity, over=background)
+
+                boxes = {
+                    False: Checkbox(False, icons, foreground, success, error),
+                    True: Checkbox(True, icons, foreground, success, error),
+                    None: Checkbox(None, icons, foreground, success, error),
+                }
+                prs = []
+                attached = True
+                for p in ps['prs']:
+                    pr = p['pr']
+                    attached = attached and p['attached']
+                    sub = ": staging failed" if pr.error else ""
+                    lines = [
+                        Line([Text(
+                            f"#{p['number']}{sub}",
+                            font,
+                            foreground,
+                            decoration=Decoration.STRIKETHROUGH if p['closed'] else Decoration(0),
+                        )]),
+                    ]
+
+                    # no need for details if closed or in error
+                    if not (p['closed'] or pr.error):
+                        if pr.draft:
+                            lines.append(Line([boxes[False], Text("is in draft", font, error)]))
+                        lines.extend([
+                            Line([
+                                boxes[bool(pr.squash or pr.merge_method)],
+                                Text(
+                                    "merge method: {}".format('single' if pr.squash else (pr.merge_method or 'missing')),
+                                    font,
+                                    foreground if pr.squash or pr.merge_method else error,
+                                ),
+                            ]),
+                            Line([
+                                boxes[bool(pr.reviewed_by)],
+                                Text(
+                                    "Reviewed" if pr.reviewed_by else "Not Reviewed",
+                                    font,
+                                    foreground if pr.reviewed_by else error,
+                                )
+                            ]),
+                            Line([
+                                boxes[pr.batch_id.skipchecks or pr.status == 'success'],
+                                Text("CI", font, foreground if pr.batch_id.skipchecks or pr.status == 'success' else error),
+                            ]),
+                        ])
+                        if not pr.batch_id.skipchecks:
+                            statuses = json.loads(pr.statuses_full)
+                            for ci in pr.repository.status_ids._for_pr(pr):
+                                st = (statuses.get(ci.context.strip()) or {'state': 'pending'})['state']
+                                color = foreground
+                                if st in ('error', 'failure'):
+                                    color = error
+                                    box = boxes[False]
+                                elif st == 'success':
+                                    box = boxes[True]
+                                else:
+                                    box = boxes[None]
+
+                                lines.append(Line([
+                                    Text(" - ", font, color),
+                                    box,
+                                    Text(f"{ci.repo_id.name}: {ci.context}", font, color)
+                                ]))
+                    prs.append(Lines(lines))
+                cell = Cell(Line(prs), background, attached)
             else:
                 ps = batches[r, b]
                 bgcolor = lighten(BG[ps['state']], by=-0.05) if pr in ps['pr_ids'] else BG[ps['state']]
@@ -418,8 +521,6 @@ BG: Mapping[str | None, Color] = collections.defaultdict(lambda: (255, 255, 255)
 CHECK_MARK = "\uf00c"
 CROSS = "\uf00d"
 BOX_EMPTY = "\uf096"
-DARK_BOX = "\uf0c8"
-DARK_CHECK = "\uf14a"
 
 
 def blend_single(c: int, over: int, opacity: float) -> int:
