@@ -1,5 +1,6 @@
 import logging
 import getpass
+import re
 import time
 
 from collections import defaultdict
@@ -135,16 +136,21 @@ class Host(models.Model):
 
         user = getpass.getuser()
 
-        docker_append = f"""
+        docker_user_creation = f"""
             RUN groupadd -g {os.getgid()} {user} \\
-            && useradd -u {os.getuid()} -g {user} -G audio,video {user} \\
-            && mkdir /home/{user} \\
-            && chown -R {user}:{user} /home/{user}
+            && useradd --create-home -u {os.getuid()} -g {user} -G audio,video {user} \\
             USER {user}
             ENV COVERAGE_FILE /data/build/.coverage
             """
-        with open(self.env['runbot.runbot']._path('docker', dockerfile.image_tag, 'Dockerfile'), 'w') as Dockerfile:
-            Dockerfile.write(dockerfile.dockerfile + docker_append)
+
+        docker_user = f"USER {user}"
+
+        with open(self.env['runbot.runbot']._path('docker', dockerfile.image_tag, 'Dockerfile'), 'w', encoding='utf-8') as Dockerfile:
+            dockerfile_content, count = re.subn('^USER TEMPLATE$', docker_user_creation, dockerfile.dockerfile, count=1, flags=re.MULTILINE)
+            if count == 0:
+                dockerfile_content = dockerfile.dockerfile + docker_user_creation
+            dockerfile_content = re.sub('^USER TEMPLATE$', docker_user_creation, dockerfile_content, flags=re.MULTILINE)
+            Dockerfile.write(dockerfile_content)
 
         docker_build_success, msg = docker_build(docker_build_path, dockerfile.image_tag)
         if not docker_build_success:
