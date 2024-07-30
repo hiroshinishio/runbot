@@ -1076,11 +1076,12 @@ class BuildResult(models.Model):
         python_params = python_params or []
         py_version = py_version if py_version is not None else build._get_py_version()
         pres = []
-        for commit_id in self.env.context.get('defined_commit_ids') or self.params_id.commit_ids:
-            if not self.params_id.skip_requirements and os.path.isfile(commit_id._source_path('requirements.txt')):
-                repo_dir = self._docker_source_folder(commit_id)
-                requirement_path = os.sep.join([repo_dir, 'requirements.txt'])
-                pres.append([f'python{py_version}', '-m', 'pip', 'install', '--user', '--progress-bar', 'off', '-r', f'{requirement_path}'])
+        if not self.params_id.skip_requirements:
+            for commit_id in self.env.context.get('defined_commit_ids') or self.params_id.commit_ids.sorted(lambda c: (c.repo_id.sequence, c.repo_id.id)):
+                if os.path.isfile(commit_id._source_path('requirements.txt')):
+                    repo_dir = self._docker_source_folder(commit_id)
+                    requirement_path = os.sep.join([repo_dir, 'requirements.txt'])
+                    pres.append([f'python{py_version}', '-m', 'pip', 'install', '--user', '--progress-bar', 'off', '-r', f'{requirement_path}'])
 
         addons_paths = self._get_addons_path()
         (server_commit, server_file) = self._get_server_info()
