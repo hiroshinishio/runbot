@@ -391,12 +391,15 @@ class ErrorRegex(models.Model):
     regex = fields.Char('Regular expression')
     re_type = fields.Selection([('filter', 'Filter out'), ('cleaning', 'Cleaning')], string="Regex type")
     sequence = fields.Integer('Sequence', default=100)
-    replacement = fields.Char('Replacement string', help="String used as a replacment in cleaning. '%' if not set")
+    replacement = fields.Char('Replacement string', help="String used as a replacment in cleaning. Use '' to remove the matching string. '%' if not set")
 
     def _r_sub(self, s):
         """ replaces patterns from the recordset by replacement's or '%' in the given string """
         for c in self:
-            s = re.sub(c.regex, c.replacement or '%', s)
+            replacement = c.replacement or '%'
+            if c.replacement == "''":
+                replacement = ''
+            s = re.sub(c.regex, replacement, s)
         return s
 
     def _r_search(self, s):

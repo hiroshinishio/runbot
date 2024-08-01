@@ -10,6 +10,7 @@ Traceback (most recent call last):
     self.start_tour("/", 'rte_translator', login='admin', timeout=120)
   File "/data/build/odoo/odoo/tests/common.py", line 1062, in start_tour
     res = self.browser_js(url_path=url_path, code=code, ready=ready, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "/data/build/odoo/odoo/tests/common.py", line 1046, in browser_js
     self.fail('%s\n%s' % (message, error))
 AssertionError: The test code "odoo.startTour('rte_translator')" failed
@@ -151,6 +152,12 @@ class TestBuildError(RunbotCase):
             're_type': 'cleaning',
         })
 
+        self.env['runbot.error.regex'].create({
+            'regex': r'\s*\^+',
+            're_type': 'cleaning',
+            'replacement': "''",
+        })
+
         error_team = self.BuildErrorTeam.create({
             'name': 'test-error-team',
             'path_glob': '*/test_ui.py'
@@ -178,6 +185,7 @@ class TestBuildError(RunbotCase):
         self.assertTrue(build_error)
         self.assertTrue(build_error.fingerprint.startswith('af0e88f3'))
         self.assertTrue(build_error.cleaned_content.startswith('%'), 'The cleaner should have replace "FAIL: " with a "%" sign by default')
+        self.assertFalse('^' in build_error.cleaned_content, 'The cleaner should have removed the "^" chars')
         error_link = self.env['runbot.build.error.link'].search([('build_id', '=', ko_build.id), ('build_error_id', '=', build_error.id)])
         self.assertTrue(error_link, 'An error link should exists')
         self.assertIn(ko_build, build_error.build_error_link_ids.mapped('build_id'), 'Ko build should be in build_error_link_ids')
